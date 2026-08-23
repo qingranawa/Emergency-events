@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <ScpSlServerPath Condition="'$(ScpSlServerPath)' == '' and '$(SCPSL_SERVER_PATH)' != ''">$(SCPSL_SERVER_PATH)</ScpSlServerPath>
+    <SL_REFERENCES Condition="'$(SL_REFERENCES)' == '' and '$(ScpSlServerPath)' != ''">$(ScpSlServerPath)\SCPSL_Data\Managed</SL_REFERENCES>
+  </PropertyGroup>
+</Project>

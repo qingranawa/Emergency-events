@@ -27,7 +27,7 @@ public sealed class RoundCoreManager
 
     private readonly Config config;
     private readonly Random random = new Random();
-    private readonly Dictionary<int, string?> originalBadgeNames = new Dictionary<int, string?>();
+    private readonly BadgeRegistry badgeRegistry = new BadgeRegistry();
     private RoundCoreState? state;
     private long roundId;
     private bool isApplying;
@@ -202,6 +202,20 @@ public sealed class RoundCoreManager
         isApplying = false;
     }
 
+    public void HandlePlayerDied(Player player)
+    {
+        if (!badgeRegistry.TryGet(player.Id, out string? originalBadge))
+        {
+            LogDebug(roundId, "BadgeClearSkipped", $"Player={player.Id}; Reason=BadgeMappingNotFound");
+            return;
+        }
+
+        if (TryRestoreBadge(player, originalBadge, "BadgeClearedOnDeath"))
+        {
+            badgeRegistry.Remove(player.Id);
+        }
+    }
+
     private List<Player> GetOpeningRoster()
     {
         return Player.Enumerable
@@ -260,32 +274,7 @@ public sealed class RoundCoreManager
 
     private List<RoleTypeId> BuildScpRoles(int count)
     {
-        if (count <= 0)
-        {
-            return new List<RoleTypeId>();
-        }
-
-        List<RoleTypeId> roles = new List<RoleTypeId>(count);
-        int guaranteed939Count = Math.Min(count, 2);
-
-        for (int index = 0; index < guaranteed939Count; index++)
-        {
-            roles.Add(RoleTypeId.Scp939);
-        }
-
-        List<RoleTypeId> remainingPool = ScpRolePool
-            .Where(role => role != RoleTypeId.Scp939)
-            .ToList();
-        Shuffle(remainingPool);
-
-        for (int index = roles.Count; index < count; index++)
-        {
-            int remainingIndex = (index - guaranteed939Count) % remainingPool.Count;
-            roles.Add(remainingPool[remainingIndex]);
-        }
-
-        Shuffle(roles);
-        return roles;
+        return ScpRolePolicy.BuildRoles(count, ScpRolePool, RoleTypeId.Scp939, random);
     }
 
     private static void AddAssignments(
@@ -328,12 +317,9 @@ public sealed class RoundCoreManager
         {
             try
             {
-                if (!originalBadgeNames.ContainsKey(player.Id))
-                {
-                    originalBadgeNames[player.Id] = player.RankName;
-                }
-
-                string originalBadge = originalBadgeNames[player.Id] ?? string.Empty;
+                badgeRegistry.Remember(player.Id, player.RankName);
+                badgeRegistry.TryGet(player.Id, out string? savedBadge);
+                string originalBadge = savedBadge ?? string.Empty;
                 string expectedBadge = BuildBadgeWithTitle(originalBadge, title);
                 player.RankName = expectedBadge;
                 string actualBadge = player.RankName ?? string.Empty;
@@ -382,7 +368,7 @@ public sealed class RoundCoreManager
 
             try
             {
-                string originalBadge = originalBadgeNames.TryGetValue(player.Id, out string? savedBadge)
+                string originalBadge = badgeRegistry.TryGet(player.Id, out string? savedBadge)
                     ? savedBadge ?? string.Empty
                     : player.RankName ?? string.Empty;
                 string expectedBadge = BuildBadgeWithTitle(originalBadge, title);
@@ -551,26 +537,43 @@ public sealed class RoundCoreManager
 
     private void RestoreBadges()
     {
-        foreach (KeyValuePair<int, string?> original in originalBadgeNames)
+        foreach (KeyValuePair<int, string?> original in badgeRegistry.Snapshot())
         {
-            Player? player = GetPlayerById(original.Key);
-            if (player is null || !player.IsConnected)
-            {
-                continue;
-            }
-
-            try
-            {
-                player.RankName = original.Value ?? string.Empty;
-                LogDebug(roundId, "BadgeRestored", $"Player={player.Id}; Badge={original.Value ?? "<empty>"}");
-            }
-            catch (Exception exception)
-            {
-                LogError(roundId, "BadgeRestoreFailed", exception, $"Player={original.Key}");
-            }
+            TryRestoreBadge(original.Key, original.Value, "BadgeRestored");
         }
 
-        originalBadgeNames.Clear();
+        badgeRegistry.Clear();
+    }
+
+    private bool TryRestoreBadge(int playerId, string? originalBadge, string action)
+    {
+        Player? player = GetPlayerById(playerId);
+        if (player is null || !player.IsConnected)
+        {
+            return false;
+        }
+
+        return TryRestoreBadge(player, originalBadge, action);
+    }
+
+    private bool TryRestoreBadge(Player player, string? originalBadge, string action)
+    {
+        if (!player.IsConnected)
+        {
+            return false;
+        }
+
+        try
+        {
+            player.RankName = originalBadge ?? string.Empty;
+            LogDebug(roundId, action, $"Player={player.Id}; Badge={originalBadge ?? "<empty>"}");
+            return true;
+        }
+        catch (Exception exception)
+        {
+            LogError(roundId, "BadgeRestoreFailed", exception, $"Player={player.Id}; Action={action}");
+            return false;
+        }
     }
 
     private void Shuffle<T>(IList<T> values)

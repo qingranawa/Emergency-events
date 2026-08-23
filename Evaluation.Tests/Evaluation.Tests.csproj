@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>12.0</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\RoundCore\PopulationTier.cs" Link="RoundCore\PopulationTier.cs" />
+    <Compile Include="..\RoundCore\BadgeRegistry.cs" Link="RoundCore\BadgeRegistry.cs" />
+    <Compile Include="..\RoundCore\RoundRestartResetter.cs" Link="RoundCore\RoundRestartResetter.cs" />
+    <Compile Include="..\Reinforcement\FirstWavePolicy.cs" Link="Reinforcement\FirstWavePolicy.cs" />
+    <Compile Include="..\Reinforcement\WaveControlPolicy.cs" Link="Reinforcement\WaveControlPolicy.cs" />
+    <Compile Include="..\Reinforcement\SupportScoreLedger.cs" Link="Reinforcement\SupportScoreLedger.cs" />
+    <Compile Include="..\RoundCore\ScpRolePolicy.cs" Link="RoundCore\ScpRolePolicy.cs" />
+    <Compile Include="..\Evaluation\*.cs" Exclude="..\Evaluation\SnapshotCollector.cs;..\Evaluation\DlrcEvaluatorService.cs" Link="Evaluation\%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

@@ -16,9 +16,24 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Evaluation.Tests\**" />
+    <EmbeddedResource Remove="Evaluation.Tests\**" />
+    <None Remove="Evaluation.Tests\**" />
+    <Content Remove="Evaluation.Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="ExMod.Exiled" Version="9.14.2" />
     <Reference Include="UnityEngine.CoreModule" Condition="'$(SL_REFERENCES)' != ''">
       <HintPath>$(SL_REFERENCES)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule" Condition="'$(SL_REFERENCES)' != ''">
+      <HintPath>$(SL_REFERENCES)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Mirror" Condition="'$(SL_REFERENCES)' != ''">
+      <HintPath>$(SL_REFERENCES)\Mirror.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Assembly-CSharp-firstpass" Condition="'$(SL_REFERENCES)' != ''">

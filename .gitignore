@@ -1,3 +1,4 @@
+.DS_Store
 bin/
 obj/
 .vs/
@@ -10,4 +11,7 @@ TestResults/
 *.log
 *.tmp
 server-live.log
+.test-server/
+.test-tools/
 
+/.superpowers/

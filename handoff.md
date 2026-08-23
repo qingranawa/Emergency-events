@@ -18,14 +18,14 @@
 - 当前已经完成：Round Core 开局编制主体、开局角色分配、装备、HCZ 出生点、Badge 追加、运行时校验、普通支援基础调度。
 - 当前已经实机确认：17 人 E 档开局、精确编制、两只 SCP-939、安保/混沌装备、HCZ A/B 交换、Owner Badge 追加；用户确认 Badge 测试正常。
 - 当前没有完成：D-LRC Evaluator、Crisis System、Event Director、O4 投票、特殊事件包和 RA 管理命令。
-- 本次 Git 操作只初始化本地仓库并添加远程 origin，没有 commit，也没有 push。换电脑前如果希望从 GitHub 拉取代码，需要另行执行 commit 和 push。
+- 当前本地仓库已有初始提交 535e3aa（feat: Implement Five-Minute Normal Reinforcement Plan），包含当前源代码、计划文档、handoff.md 和 .gitignore。本次会话没有主动发出 commit 或 push 命令；远端是否已有该提交尚未确认。
 - 按用户要求没有创建测试项目；验证方式是构建、日志和真实服务器回合测试。
 
 ## 1. 换电脑前后的 Git 说明
 
 ### 本次已完成
 
-本目录原本不是 Git 仓库。本次已完成：
+本目录原本不是 Git 仓库。本次已完成初始化和远程绑定；当前本地 HEAD 是提交 535e3aa：
 
 ~~~text
 git init
@@ -40,16 +40,15 @@ git status --short --branch
 git remote -v
 ~~~
 
-### 重要：当前不包含远程推送
+### 重要：远程推送状态尚未确认
 
-只添加远程地址不会把代码上传到 GitHub。当前工作区的 handoff.md 和 .gitignore 也需要一起纳入下一次提交。
+本地有提交不等于 GitHub 远端已有提交。本次核对时 git ls-remote 因 GitHub 凭据读取失败而无法完成，因此不要把远端状态猜成已推送或未推送。
 
-在确认要上传之前，不要擅自 push。获得明确授权后，建议顺序是：
+在确认远端状态和用户授权之前，不要擅自 push。若确认需要上传，先检查工作区，再执行：
 
 ~~~text
 git add .
 git status
-git commit -m "建立 EmergencyEvents 初始版本"
 git push -u origin main
 ~~~
 

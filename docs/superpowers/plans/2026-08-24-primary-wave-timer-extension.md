@@ -4,7 +4,7 @@
 
 **Goal:** 在每次成功完成原版 Foundation/MTF 或 Chaos/CI Primary Wave 后，等待原版计时器重置与人数重算，再对刷新方增加 60 秒、对方增加 15 秒，并保留所有既有 Module 01–03 行为。
 
-**Architecture:** 用纯逻辑策略把刷新方/对方配置映射为 Foundation/Chaos 两个独立增量，并用 `MajorWaveRecord` 的 WaveId guard 保证单波只处理一次。运行时先在 EXILED `RespawnedTeam` 记录波次事实，再绑定 SCP:SL 14.2.7 原生 `Respawning.WaveManager.OnWaveSpawned` 边界；该事件在 `SpawnableWaveBase.OnWaveSpawned` 重置和 `TimeBasedWave.OnAnyWaveSpawned` 人数重算之后触发。插件随后读取 `TimedWave.Timer.TimeLeft`，只修改 `SpawnIntervalSeconds`，发送原版 Timer 更新消息；不重置、暂停、同步或重建任一计时器。处理同时输出波次前、原版重算后和插件增量后的关键快照，再发布既有 `POST_MAJOR_WAVE`。
+**Architecture:** 用纯逻辑策略把刷新方/对方配置映射为 Foundation/Chaos 两个独立增量，并用 `MajorWaveRecord` 的 WaveId guard 保证单波只处理一次。运行时先在 EXILED `RespawnedTeam` 记录波次事实，再绑定 SCP:SL 14.2.7 原生 `Respawning.WaveManager.OnWaveSpawned` 边界；该事件在 `SpawnableWaveBase.OnWaveSpawned` 重置和 `TimeBasedWave.OnAnyWaveSpawned` 人数重算之后触发。插件随后读取原版重算后的 `TimePassed` 与 `SpawnIntervalSeconds`，只回退当前 `TimePassed` 以增加本次 `TimeLeft`，不永久修改原版 `SpawnIntervalSeconds`，发送原版 Timer 更新消息。处理同时输出波次前、原版重算后和插件增量后的关键快照，再发布既有 `POST_MAJOR_WAVE`。
 
 **Tech Stack:** C# 12、.NET Framework 4.8、EXILED 9.14.2、SCP:SL 14.2.7、MEC、现有 Evaluation.Tests net8 控制台测试。
 
@@ -91,7 +91,7 @@ Confirm no existing Module 02 regression before changing the timer write path.
 
 **Interfaces:**
 - The native `Respawning.WaveManager.OnWaveSpawned` callback is the ordering boundary after `SpawnableWaveBase.OnWaveSpawned` and `TimeBasedWave.OnAnyWaveSpawned` finish.
-- It reads both current timers as `BeforeExtension`/`AfterVanillaReset`, maps extensions by the completed wave faction, writes only `SpawnIntervalSeconds`, sends native `UpdateMessageFlags.Timer`, then reads the after values.
+- It reads both current timers as `Before`/`AfterVanillaReset`, maps extensions by the completed wave faction, adjusts only the current `TimePassed` to extend this wave's `TimeLeft`, leaves `SpawnIntervalSeconds` unchanged, sends native `UpdateMessageFlags.Timer`, then reads the after values.
 - Success logs include `WaveId`, `WaveFaction`, `ActualSpawnedCount`, `VanillaResetDetected`, `BeforeWave`, `BeforeExtension`, `AfterVanillaReset`, both extensions, both after values, `AppliedAt`, `WaveCompletedAt`, `DelayAfterWaveCompletionMs`, and `Applied=true`.
 - Timer unavailability, disabled values, duplicate callback, Mini-Wave, zero spawn and non-primary cases log `Applied=false` with explicit reason and still preserve one `POST_MAJOR_WAVE`.
 

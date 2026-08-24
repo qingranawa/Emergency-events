@@ -21,7 +21,8 @@ public sealed class SnapshotCollector
         BattlefieldMomentumSnapshot? momentum,
         int warheadCancellationCount,
         DateTime timestamp,
-        TimeSpan elapsed)
+        TimeSpan elapsed,
+        DateTime? warheadDetonatedAt = null)
     {
         List<Player> players = Player.Enumerable.ToList();
         List<int> activePlayerIds = new List<int>();
@@ -194,7 +195,45 @@ public sealed class SnapshotCollector
             surfaceChaosCombatants: surfaceChaosCombatants,
             surfaceMainScp: surfaceMainScp,
             surfaceOtherHostiles: surfaceOtherHostiles,
-            scp079TierIsValid: scp079TierIsValid);
+            scp079TierIsValid: scp079TierIsValid,
+            warheadDetonatedAt: warheadDetonatedAt);
+    }
+
+    /// <summary>
+    /// 在 Primary Wave 完成回调时记录客观 SCP 战斗等价值，不执行危机判断。
+    /// </summary>
+    public static double CaptureScpCombatEquivalent()
+    {
+        double mainScpCount = 0d;
+        double zombieCount = 0d;
+        foreach (Player player in Player.Enumerable)
+        {
+            if (!player.IsConnected || !player.IsAlive)
+            {
+                continue;
+            }
+
+            RoleTypeId role = player.Role.Type;
+            if (role == RoleTypeId.Overwatch
+                || role == RoleTypeId.Spectator
+                || player.IsOverwatchEnabled)
+            {
+                continue;
+            }
+
+            if (role == RoleTypeId.Scp0492)
+            {
+                zombieCount++;
+                continue;
+            }
+
+            if (role == RoleTypeId.Scp079 || IsMainScpRole(role.ToString()))
+            {
+                mainScpCount++;
+            }
+        }
+
+        return mainScpCount + zombieCount / 3d;
     }
 
     private static ScpSnapshot ReadMainScpSnapshot(Player player, string roleName)

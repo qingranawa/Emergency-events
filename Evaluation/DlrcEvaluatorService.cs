@@ -33,6 +33,7 @@ public sealed class DlrcEvaluatorService
     private bool isActive;
     private long roundId;
     private int warheadCancellationCount;
+    private DateTime? warheadDetonatedAt;
     private long evaluationId;
 
     public DlrcEvaluatorService(Config config)
@@ -87,6 +88,7 @@ public sealed class DlrcEvaluatorService
         warheadCancellationEventKeys.Clear();
         queuedPostMajorWaveEvents.Clear();
         warheadCancellationCount = 0;
+        warheadDetonatedAt = null;
         evaluationId = 0L;
         lastResult = null;
         lastSnapshot = null;
@@ -144,6 +146,29 @@ public sealed class DlrcEvaluatorService
             roundId,
             "WarheadCancellationRecorded",
             $"Count={warheadCancellationCount}; EventKey={eventKey}; ScorePerCancellation={options.WarheadCancelScore:0.####}; MaxScore={options.WarheadCancelMaxScore:0.####}");
+    }
+
+    /// <summary>
+    /// 记录原版 Warhead.Detonated 事件时间，供后续快照消费客观事实。
+    /// </summary>
+    public void HandleWarheadDetonated(DateTime detonatedAt)
+    {
+        if (!IsActiveRound() || warheadDetonatedAt.HasValue)
+        {
+            return;
+        }
+
+        DateTime normalizedTimestamp = detonatedAt.Kind == DateTimeKind.Utc
+            ? detonatedAt
+            : detonatedAt.ToUniversalTime();
+        if (normalizedTimestamp == default(DateTime))
+        {
+            LogWarn(roundId, "WarheadDetonatedFactUnavailable", "Reason=DefaultTimestamp");
+            return;
+        }
+
+        warheadDetonatedAt = normalizedTimestamp;
+        LogInfo(roundId, "WarheadDetonatedRecorded", $"DetonatedAt={normalizedTimestamp:O}; Source=Exiled.Warhead.Detonated");
     }
 
     /// <summary>
@@ -254,7 +279,8 @@ public sealed class DlrcEvaluatorService
             || lastSnapshot is not null
             || evaluationHistory.Count > 0
             || warheadCancellationEventKeys.Count > 0
-            || queuedPostMajorWaveEvents.Count > 0;
+            || queuedPostMajorWaveEvents.Count > 0
+            || warheadDetonatedAt.HasValue;
         long cleanupRoundId = roundId;
         bool handleCleanupSucceeded = StopScheduledEvaluation();
 
@@ -266,6 +292,7 @@ public sealed class DlrcEvaluatorService
         queuedPostMajorWaveEvents.Clear();
         queuedManualEvaluation = false;
         warheadCancellationCount = 0;
+        warheadDetonatedAt = null;
         evaluationId = 0L;
         lastSnapshot = null;
         lastResult = null;
@@ -278,7 +305,7 @@ public sealed class DlrcEvaluatorService
             LogInfo(
                 cleanupRoundId,
                 "Cleanup",
-                $"Reason={reason}; EvaluationHistoryCleared=true; MomentumCleared=true; SnapshotCleared=true; LastResultCleared=true; WarheadDedupCleared=true; PostMajorWaveQueueCleared=true; ScheduledHandleCleanup={handleCleanupSucceeded}; Cleanup={(handleCleanupSucceeded ? "SUCCESS" : "PARTIAL")}");
+                $"Reason={reason}; EvaluationHistoryCleared=true; MomentumCleared=true; SnapshotCleared=true; LastResultCleared=true; LastTriggerCleared=true; WarheadDedupCleared=true; WarheadDetonationFactCleared=true; PostMajorWaveQueueCleared=true; ScheduledHandleCleanup={handleCleanupSucceeded}; Cleanup={(handleCleanupSucceeded ? "SUCCESS" : "PARTIAL")}");
         }
     }
 
@@ -428,7 +455,8 @@ public sealed class DlrcEvaluatorService
             momentum,
             warheadCancellationCount,
             timestamp,
-            elapsed);
+            elapsed,
+            warheadDetonatedAt);
         DlrcEvaluationResult? previous = lastResult;
         DlrcEvaluationResult result = DlrcEvaluator.Evaluate(
             snapshot,

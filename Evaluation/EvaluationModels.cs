@@ -67,7 +67,8 @@ public sealed class MajorWaveSnapshot
         DateTime startedAt,
         DateTime? evaluatedAt = null,
         IEnumerable<int>? memberIds = null,
-        DateTime? completedAt = null)
+        DateTime? completedAt = null,
+        double? scpCombatEquivalentAtCompletion = null)
     {
         Name = EvaluationValueNormalizer.NormalizeName(name);
         StartingCount = EvaluationValueNormalizer.NormalizeNonNegativeInt(startingCount);
@@ -79,6 +80,9 @@ public sealed class MajorWaveSnapshot
         CompletedAt = completedAt ?? startedAt;
         EvaluatedAt = evaluatedAt;
         MemberIds = EvaluationValueNormalizer.ClonePlayerIds(memberIds);
+        ScpCombatEquivalentAtCompletion = scpCombatEquivalentAtCompletion.HasValue
+            ? EvaluationValueNormalizer.NormalizeNonNegativeDouble(scpCombatEquivalentAtCompletion.Value)
+            : null;
     }
 
     public string Name { get; }
@@ -110,6 +114,8 @@ public sealed class MajorWaveSnapshot
     public DateTime? EvaluationTime => EvaluatedAt;
 
     public IReadOnlyList<int> MemberIds { get; }
+
+    public double? ScpCombatEquivalentAtCompletion { get; }
 }
 
 /// <summary>
@@ -152,7 +158,8 @@ public sealed class RoundSnapshot
         int surfaceChaosCombatants = 0,
         int surfaceMainScp = 0,
         int surfaceOtherHostiles = 0,
-        bool scp079TierIsValid = true)
+        bool scp079TierIsValid = true,
+        DateTime? warheadDetonatedAt = null)
     {
         RoundId = EvaluationValueNormalizer.NormalizeRoundId(roundId);
         Timestamp = timestamp;
@@ -182,6 +189,7 @@ public sealed class RoundSnapshot
         WarheadUnlocked = warheadUnlocked;
         WarheadActive = warheadActive;
         WarheadDetonated = warheadDetonated;
+        WarheadDetonatedAt = warheadDetonatedAt;
         WarheadCancellationCount = EvaluationValueNormalizer.NormalizeNonNegativeInt(warheadCancellationCount);
         MajorWaveHistory = EvaluationValueNormalizer.CloneReadOnlyList(majorWaveHistory);
         RecentFoundationDeaths120s = EvaluationValueNormalizer.NormalizeNonNegativeInt(recentFoundationDeaths120s);
@@ -241,6 +249,8 @@ public sealed class RoundSnapshot
     public bool WarheadActive { get; }
 
     public bool WarheadDetonated { get; }
+
+    public DateTime? WarheadDetonatedAt { get; }
 
     public int WarheadCancellationCount { get; }
 

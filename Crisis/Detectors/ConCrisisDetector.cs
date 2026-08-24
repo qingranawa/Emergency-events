@@ -35,13 +35,22 @@ public sealed class ConCrisisDetector : ICrisisDetector
             return CreateInactive(snapshot, "SecondMajorWaveUnavailable");
         }
 
+        if (!secondWave.ScpCombatEquivalentAtCompletion.HasValue)
+        {
+            state.ResetContainment();
+            return CreateInactive(snapshot, "SecondMajorWaveBaselineUnavailable");
+        }
+
         double currentEquivalent = snapshot.MainScpAlive + snapshot.Scp0492Count / 3d;
         DateTime expectedCheckpoint = secondWave.CompletedAt.AddSeconds(options.ContainmentCheckpointSeconds);
         if (state.SecondMajorWaveCompletedAt != secondWave.CompletedAt
             || !state.ContainmentBaselineEquivalent.HasValue
             || !state.NextContainmentCheckpointAt.HasValue)
         {
-            state.StartContainmentTracking(secondWave.CompletedAt, currentEquivalent, expectedCheckpoint);
+            state.StartContainmentTracking(
+                secondWave.CompletedAt,
+                secondWave.ScpCombatEquivalentAtCompletion.Value,
+                expectedCheckpoint);
         }
 
         DateTime nextCheckpointAt = state.NextContainmentCheckpointAt
@@ -74,7 +83,8 @@ public sealed class ConCrisisDetector : ICrisisDetector
             new Dictionary<string, double>
             {
                 ["CurrentEquivalent"] = currentEquivalent,
-                ["BaselineEquivalent"] = state.ContainmentBaselineEquivalent ?? currentEquivalent,
+                ["BaselineEquivalent"] = state.ContainmentBaselineEquivalent
+                    ?? secondWave.ScpCombatEquivalentAtCompletion.Value,
                 ["FailureStreak"] = state.ContainmentFailureStreak,
                 ["SecondMajorWaveCompletedAt"] = secondWave.CompletedAt.Ticks,
             });

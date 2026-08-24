@@ -92,7 +92,7 @@ public sealed partial class Plugin : Plugin<Config>
             Config.EmergencyEventsEnabled,
             Config.MinimumPlayers);
         roundCoreManager = new RoundCoreManager(Config);
-        reinforcementManager = new ReinforcementManager(Config);
+        reinforcementManager = new ReinforcementManager(Config, SnapshotCollector.CaptureScpCombatEquivalent);
         dlrcEvaluatorService = new DlrcEvaluatorService(Config);
         if (Config.CrisisSystemEnabled)
         {
@@ -115,6 +115,7 @@ public sealed partial class Plugin : Plugin<Config>
         PlayerEvents.Left += OnPlayerLeft;
         PlayerEvents.Died += OnPlayerDied;
         WarheadEvents.Stopping += OnWarheadStopping;
+        WarheadEvents.Detonated += OnWarheadDetonated;
 
         base.OnEnabled();
         Log.Info("[EmergencyEvents] Plugin enabled; Round Core handlers registered.");
@@ -134,6 +135,7 @@ public sealed partial class Plugin : Plugin<Config>
         PlayerEvents.Left -= OnPlayerLeft;
         PlayerEvents.Died -= OnPlayerDied;
         WarheadEvents.Stopping -= OnWarheadStopping;
+        WarheadEvents.Detonated -= OnWarheadDetonated;
 
         dlrcEvaluatorService?.CleanupRound("OnDisabled");
         if (dlrcEvaluatorService is not null)
@@ -247,6 +249,11 @@ public sealed partial class Plugin : Plugin<Config>
     private void OnWarheadStopping(Exiled.Events.EventArgs.Warhead.StoppingEventArgs ev)
     {
         dlrcEvaluatorService?.HandleWarheadStopping(ev.IsAllowed);
+    }
+
+    private void OnWarheadDetonated()
+    {
+        dlrcEvaluatorService?.HandleWarheadDetonated(DateTime.UtcNow);
     }
 
     private void OnSelectingRespawnTeam(SelectingRespawnTeamEventArgs ev)

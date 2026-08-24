@@ -24,6 +24,7 @@ public sealed class CrisisManager
             new ConCrisisDetector(configuredOptions),
             new SecCrisisDetector(configuredOptions),
             new GoiCrisisDetector(),
+            new WarCrisisDetector(),
             new EndCrisisDetector(configuredOptions),
         };
     }
@@ -176,7 +177,9 @@ public sealed class CrisisManager
         }
 
         EndCrisisDetector? detector = FindDetector(CrisisTag.END) as EndCrisisDetector;
-        if (detector is null || !snapshot.WarheadDetonated)
+        if (detector is null
+            || !snapshot.WarheadDetonated
+            || !snapshot.WarheadDetonatedAt.HasValue)
         {
             detection = null;
             return false;
@@ -184,7 +187,6 @@ public sealed class CrisisManager
 
         CrisisState diagnosticState = state.Clone();
         diagnosticState.ResetEndgame();
-        diagnosticState.ObserveWarheadDetonation(snapshot.Timestamp);
         diagnosticState.StartSurfaceStalemate(snapshot.Timestamp.AddSeconds(-Math.Max(0, simulatedSeconds)));
         detection = detector.Detect(
             snapshot,
@@ -240,6 +242,7 @@ public sealed class CrisisManager
             || (tag == CrisisTag.CON && detector is ConCrisisDetector)
             || (tag == CrisisTag.SEC && detector is SecCrisisDetector)
             || (tag == CrisisTag.GOI && detector is GoiCrisisDetector)
+            || (tag == CrisisTag.WAR && detector is WarCrisisDetector)
             || (tag == CrisisTag.END && detector is EndCrisisDetector);
     }
 }

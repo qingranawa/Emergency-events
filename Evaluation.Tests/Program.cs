@@ -60,7 +60,7 @@ internal static class Program
             ("异常数值不会污染 Response Score", InvalidHealthCannotPoisonScore),
             ("详细日志包含人工复算所需的分项和原始数据", EvaluationLogContainsEveryRecalculationComponent),
             ("死亡清除 Badge 后不再保留旧玩家映射", BadgeRegistryRemovesBadgeAfterDeath),
-            ("高人口 SCP 角色不再强制第二只 SCP-939", ScpRolePolicyUsesOne939),
+            ("SCP-939 只是合法随机候选且 SCP 总数保持正确", ScpRolePolicyUsesRandom939Candidate),
             ("强制重启按顺序清理全部回合状态", RoundRestartResetsAllRoundState),
             ("Primary Wave 五档人数上限符合规格", PrimaryWaveCapsMatchSpecification),
             ("Primary Wave 上限只能截断原版人数", PrimaryWaveCapsNeverExpandVanillaWave),
@@ -89,13 +89,16 @@ internal static class Program
             ("原版候选只有成功出生玩家才计入实际人数", ActualSpawnedPlayerRequiresSuccessfulNativeRole),
             ("Module 04 发布危机公共契约", CrisisContractsArePublished),
             ("Module 04 发布四个无状态危机判定器", StatelessCrisisDetectorsArePublished),
+            ("WAR 按可靠核弹事实判定生命周期", WarUsesReliableWarheadFacts),
             ("BIO 使用各档默认僵尸阈值且不依赖 049 本体", BioUsesTierAwareZombieThresholds),
             ("SYS 与 SEC 只按其自身事实判定", StatelessDetectorsUseOwnFacts),
             ("SEC 覆盖全部人口档位且保留 E 档特殊 L3", SecurityUsesTierAwareThresholds),
             ("CON、END 与地表事实快照契约已发布", StatefulCrisisContractsArePublished),
             ("CON 跟随第二个实际大波并按五分钟检查升级", ContainmentUsesSecondMajorWaveCheckpoints),
             ("CON 的首个检查点从实际大波完成时刻起算", ContainmentUsesActualWaveCompletionTime),
+            ("CON 基准使用第二波完成时的客观事实", ContainmentUsesCompletionFactBaseline),
             ("END 仅在核爆后连续地表僵持时升级", EndgameRequiresContinuousSurfaceStalemate),
+            ("END 仅接受可靠的 DetonatedAt 事实", EndRequiresReliableDetonationFact),
             ("GOI 只使用未来注册钩子与基金会劣势条件", GoiRequiresRegisteredHostileThirdParty),
             ("CrisisManager 与 Module03 完成事件契约已发布", CrisisManagerContractsArePublished),
             ("CrisisManager 固定排序且保持 Global D-LRC 独立", CrisisManagerBuildsStableAssessment),
@@ -179,6 +182,7 @@ internal static class Program
             "EmergencyEvents.Crisis.Detectors.SysCrisisDetector",
             "EmergencyEvents.Crisis.Detectors.SecCrisisDetector",
             "EmergencyEvents.Crisis.Detectors.GoiCrisisDetector",
+            "EmergencyEvents.Crisis.Detectors.WarCrisisDetector",
         };
 
         foreach (string contractName in contractNames)
@@ -238,6 +242,36 @@ internal static class Program
         AssertEqual(CrisisSeverity.Level4, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 1, mainScpAlive: 1)).Severity, "C 档基金会一人且存在 SCP 应为 SEC L4");
         AssertEqual(CrisisSeverity.Level5, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 0, mainScpAlive: 1)).Severity, "基金会为零且存在 SCP 应为 SEC L5");
 
+    }
+
+    private static void WarUsesReliableWarheadFacts()
+    {
+        WarCrisisDetector detector = new WarCrisisDetector();
+        DateTime timestamp = new DateTime(2026, 8, 24, 16, 0, 0, DateTimeKind.Utc);
+
+        AssertEqual(
+            CrisisSeverity.Inactive,
+            Detect(detector, CreateSnapshot(timestamp: timestamp, warheadUnlocked: false)).Severity,
+            "Locked 核弹必须保持 WAR inactive");
+        AssertEqual(
+            CrisisSeverity.Level3,
+            Detect(detector, CreateSnapshot(timestamp: timestamp, warheadUnlocked: true)).Severity,
+            "Unlocked 核弹必须为 WAR L3");
+        CrisisDetectionResult active = Detect(
+            detector,
+            CreateSnapshot(timestamp: timestamp, warheadUnlocked: true, warheadActive: true));
+        AssertEqual(CrisisSeverity.Level4, active.Severity, "Countdown Active 核弹必须为 WAR L4");
+        AssertTrue(active.Severity != CrisisSeverity.Level5, "没有可靠 L5 事实时不得猜测 WAR L5");
+        AssertEqual(
+            CrisisSeverity.Inactive,
+            Detect(
+                detector,
+                CreateSnapshot(
+                    timestamp: timestamp,
+                    warheadUnlocked: true,
+                    warheadActive: true,
+                    warheadDetonated: true)).Severity,
+            "Detonated 后 WAR 必须 inactive");
     }
 
     private static void SecurityUsesTierAwareThresholds()
@@ -325,8 +359,8 @@ internal static class Program
         DateTime secondWaveAt = new DateTime(2026, 8, 24, 14, 0, 0, DateTimeKind.Utc);
         MajorWaveSnapshot[] waves =
         {
-            CreateWave(6, 6, false, 0d, secondWaveAt.AddMinutes(-5)),
-            CreateWave(6, 6, false, 0d, secondWaveAt),
+            CreateWave(6, 6, false, 0d, secondWaveAt.AddMinutes(-5), scpCombatEquivalentAtCompletion: 13d / 3d),
+            CreateWave(6, 6, false, 0d, secondWaveAt, scpCombatEquivalentAtCompletion: 13d / 3d),
         };
         ConCrisisDetector detector = new ConCrisisDetector();
         CrisisState state = new CrisisState();
@@ -345,8 +379,8 @@ internal static class Program
         DateTime secondWaveCompletedAt = secondWaveStartedAt.AddMinutes(2);
         MajorWaveSnapshot[] waves =
         {
-            CreateWave(6, 6, false, 0d, secondWaveStartedAt.AddMinutes(-5)),
-            CreateWave(6, 6, false, 0d, secondWaveStartedAt, completedAt: secondWaveCompletedAt),
+            CreateWave(6, 6, false, 0d, secondWaveStartedAt.AddMinutes(-5), scpCombatEquivalentAtCompletion: 3d),
+            CreateWave(6, 6, false, 0d, secondWaveStartedAt, completedAt: secondWaveCompletedAt, scpCombatEquivalentAtCompletion: 3d),
         };
         ConCrisisDetector detector = new ConCrisisDetector();
         CrisisState state = new CrisisState();
@@ -354,6 +388,40 @@ internal static class Program
         Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt, mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state);
         AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt.AddMinutes(4).AddSeconds(59), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "CON 不得从波次开始时刻提前计算");
         AssertEqual(CrisisSeverity.Level3, Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt.AddMinutes(5), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "CON 必须从实际波次完成五分钟后执行第一次检查");
+    }
+
+    private static void ContainmentUsesCompletionFactBaseline()
+    {
+        DateTime secondWaveCompletedAt = new DateTime(2026, 8, 24, 15, 30, 0, DateTimeKind.Utc);
+        MajorWaveSnapshot[] waves =
+        {
+            CreateWave(6, 6, false, 0d, secondWaveCompletedAt.AddMinutes(-5), scpCombatEquivalentAtCompletion: 8d),
+            CreateWave(6, 6, false, 0d, secondWaveCompletedAt, scpCombatEquivalentAtCompletion: 10d),
+        };
+        ConCrisisDetector detector = new ConCrisisDetector();
+        CrisisState state = new CrisisState();
+
+        AssertEqual(
+            CrisisSeverity.Inactive,
+            Detect(
+                detector,
+                CreateSnapshot(
+                    timestamp: secondWaveCompletedAt,
+                    mainScpAlive: 1,
+                    majorWaveHistory: waves),
+                state).Severity,
+            "第二波完成时的 baseline 必须来自波次事实，而不是第一次 Detector 快照");
+
+        AssertEqual(
+            CrisisSeverity.Inactive,
+            Detect(
+                detector,
+                CreateSnapshot(
+                    timestamp: secondWaveCompletedAt.AddMinutes(5),
+                    mainScpAlive: 8,
+                    majorWaveHistory: waves),
+                state).Severity,
+            "CON 首次检查必须继续使用第二波完成时保存的 baseline");
     }
 
     private static void EndgameRequiresContinuousSurfaceStalemate()
@@ -370,6 +438,27 @@ internal static class Program
         AssertEqual(CrisisSeverity.Level5, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(12), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "END 12:00 必须为 L5");
         AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(13), warheadDetonated: true), state).Severity, "地表僵持消失时 END 必须重置");
         AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(18), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "僵持重新开始时不得沿用旧 END 计时");
+    }
+
+    private static void EndRequiresReliableDetonationFact()
+    {
+        DateTime timestamp = new DateTime(2026, 8, 24, 14, 30, 0, DateTimeKind.Utc);
+        RoundSnapshot snapshotWithoutFact = new RoundSnapshot(
+            roundId: 1,
+            timestamp: timestamp.AddMinutes(5),
+            roundElapsedTime: TimeSpan.Zero,
+            populationTier: PopulationTier.C,
+            roundStartPopulation: 20,
+            startingScpCount: 2,
+            warheadDetonated: true,
+            surfaceFoundationCombatants: 1,
+            surfaceChaosCombatants: 1);
+        EndCrisisDetector detector = new EndCrisisDetector();
+
+        AssertEqual(
+            CrisisSeverity.Inactive,
+            Detect(detector, snapshotWithoutFact).Severity,
+            "没有可靠 DetonatedAt 时不得把第一次观察时间冒充真实核爆时间");
     }
 
     private static void GoiRequiresRegisteredHostileThirdParty()
@@ -426,14 +515,14 @@ internal static class Program
             snapshot,
             result))
             ?? throw new InvalidOperationException("成功的 D-LRC 评估必须产生 CrisisAssessment");
-        AssertEqual("DLRC-C4-BIO+SYS", assessment.Code, "核弹状态暂不应产生 WAR 危机标签");
+        AssertEqual("DLRC-C4-BIO+SYS+WAR", assessment.Code, "完整 D-LRC Code 必须包含 WAR 标签");
         AssertSequence(
-            new[] { CrisisTag.BIO, CrisisTag.SYS },
+            new[] { CrisisTag.BIO, CrisisTag.SYS, CrisisTag.WAR },
             assessment.ActiveTags,
             "危机标签顺序错误");
         AssertEqual(CrisisSeverity.Level3, assessment.GetSeverity(CrisisTag.BIO), "BIO 严重度错误");
         AssertEqual(CrisisSeverity.Level4, assessment.GetSeverity(CrisisTag.SYS), "SYS 严重度错误");
-        AssertEqual(CrisisSeverity.Inactive, assessment.GetSeverity(CrisisTag.WAR), "核弹解锁和倒计时暂不应产生 WAR 危机");
+        AssertEqual(CrisisSeverity.Level4, assessment.GetSeverity(CrisisTag.WAR), "核弹倒计时必须产生 WAR L4");
 
         CrisisAssessment? retained = manager.Evaluate(new DlrcEvaluationCompletedEvent(
             1002,
@@ -514,6 +603,11 @@ internal static class Program
                     CrisisSeverity.Level4,
                     "Zombie pressure",
                     new Dictionary<string, double> { ["ZombieCount"] = 5d }),
+                new CrisisDetectionResult(
+                    CrisisTag.WAR,
+                    true,
+                    CrisisSeverity.Level4,
+                    "Countdown active"),
             });
         string report = (string)format!.Invoke(null, new object?[] { snapshot, result, assessment })!;
 
@@ -529,6 +623,7 @@ internal static class Program
             "FoundationCombatShare=",
             "CrisisCode=",
             "BIO=Active:True",
+            "WAR=Active:True;Severity=4",
         };
         foreach (string token in requiredTokens)
         {
@@ -688,9 +783,9 @@ internal static class Program
         AssertTrue(manager.CurrentCrisisAssessment is null, "手动诊断不得写入真实 CrisisAssessment");
 
         AssertTrue(
-            !manager.TryDiagnose(CrisisTag.WAR, snapshot, result, out CrisisDetectionResult? war),
-            "尚未实现的 WAR 必须明确报告不可诊断");
-        AssertTrue(war is null, "尚未实现的 WAR 不得伪造检测结果");
+            manager.TryDiagnose(CrisisTag.WAR, snapshot, result, out CrisisDetectionResult? war),
+            "WAR 必须复用正式 Detector 提供诊断");
+        AssertEqual(CrisisSeverity.Inactive, war!.Severity, "Locked WAR 诊断必须 inactive");
     }
 
     private static void CrisisDiagnosticSnapshotFactoryPreservesSource()
@@ -799,8 +894,8 @@ internal static class Program
         DateTime secondWaveAt = new DateTime(2026, 8, 24, 17, 0, 0, DateTimeKind.Utc);
         MajorWaveSnapshot[] waves =
         {
-            CreateWave(6, 6, false, 0d, secondWaveAt.AddMinutes(-5)),
-            CreateWave(6, 6, false, 0d, secondWaveAt),
+            CreateWave(6, 6, false, 0d, secondWaveAt.AddMinutes(-5), scpCombatEquivalentAtCompletion: 13d / 3d),
+            CreateWave(6, 6, false, 0d, secondWaveAt, scpCombatEquivalentAtCompletion: 13d / 3d),
         };
         RoundSnapshot baseline = CreateSnapshot(
             timestamp: secondWaveAt,
@@ -883,7 +978,7 @@ internal static class Program
         AssertTrue(!registry.TryGet(12, out _), "死亡恢复后不应继续保留玩家 Badge 映射");
     }
 
-    private static void ScpRolePolicyUsesOne939()
+    private static void ScpRolePolicyUsesRandom939Candidate()
     {
         string[] pool =
         {
@@ -893,18 +988,32 @@ internal static class Program
             "Scp3114",
             "Scp939",
         };
-        List<string> roles = ScpRolePolicy.BuildRoles(3, pool, "Scp939", new Random(7));
-        int scp939Count = 0;
-        foreach (string role in roles)
+        const int totalRounds = 10000;
+        int double939Count = 0;
+        Random random = new Random(939);
+        for (int round = 0; round < totalRounds; round++)
         {
-            if (role == "Scp939")
+            List<string> roles = ScpRolePolicy.BuildRoles(3, pool, random);
+            AssertEqual(3, roles.Count, "每轮 SCP 角色数量必须等于请求数量");
+            int scp939Count = 0;
+            foreach (string role in roles)
             {
-                scp939Count++;
+                AssertTrue(Array.IndexOf(pool, role) >= 0, "每个角色都必须来自合法 SCP 候选池");
+                if (role == "Scp939")
+                {
+                    scp939Count++;
+                }
+            }
+
+            if (scp939Count >= 2)
+            {
+                double939Count++;
             }
         }
 
-        AssertEqual(3, roles.Count, "SCP 角色数量错误");
-        AssertEqual(1, scp939Count, "高人口回合不得无条件生成第二只 SCP-939");
+        AssertTrue(double939Count > 0, "固定随机模拟必须出现双 939 回合");
+        AssertTrue(double939Count < totalRounds, "固定随机模拟不得保证每轮都是双 939");
+        Console.WriteLine($"[INFO][M01] Scp939Simulation TotalRounds={totalRounds}; Double939Count={double939Count}; TotalScpPerRound=3");
     }
 
     private static void PrimaryWaveCapsMatchSpecification()
@@ -1149,8 +1258,11 @@ internal static class Program
             "第二波应重新从原版值生成增量");
         AssertEqual(firstFoundation, secondFoundation, "刷新方增量不应跨波次累加");
         AssertEqual(firstChaos, secondChaos, "对方增量不应跨波次累加");
-        AssertNear(390d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(330d, secondFoundation), "第二波必须基于新的原版值计算");
-        AssertNear(345d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(330d, secondChaos), "第二波对方必须基于新的原版值计算");
+        double firstTimePassed = PrimaryWaveTimerExtensionPolicy.ApplyExtensionToTimePassed(0d, firstFoundation);
+        double secondTimePassed = PrimaryWaveTimerExtensionPolicy.ApplyExtensionToTimePassed(0d, secondFoundation);
+        AssertNear(firstTimePassed, secondTimePassed, "连续两波都必须从原版 reset 的 TimePassed=0 开始");
+        AssertNear(390d, 330d - firstTimePassed, "第一波应只延长当前 timer 的剩余时间");
+        AssertNear(390d, 330d - secondTimePassed, "第二波应重新得到相同的当前 timer 延长值");
     }
 
     private static void SpecialPersonnelEventDoesNotApplyTimerExtension()
@@ -2734,11 +2846,13 @@ internal static class Program
         int surfaceFoundationCombatants = 0,
         int surfaceChaosCombatants = 0,
         int surfaceMainScp = 0,
-        int surfaceOtherHostiles = 0)
+        int surfaceOtherHostiles = 0,
+        DateTime? warheadDetonatedAt = null)
     {
+        DateTime resolvedTimestamp = timestamp ?? new DateTime(2026, 8, 23, 12, 0, 0, DateTimeKind.Utc);
         return new RoundSnapshot(
             roundId: roundId,
-            timestamp: timestamp ?? new DateTime(2026, 8, 23, 12, 0, 0, DateTimeKind.Utc),
+            timestamp: resolvedTimestamp,
             roundElapsedTime: roundElapsedTime ?? TimeSpan.Zero,
             populationTier: populationTier,
             roundStartPopulation: roundStartPopulation,
@@ -2766,7 +2880,8 @@ internal static class Program
             surfaceFoundationCombatants: surfaceFoundationCombatants,
             surfaceChaosCombatants: surfaceChaosCombatants,
             surfaceMainScp: surfaceMainScp,
-            surfaceOtherHostiles: surfaceOtherHostiles);
+            surfaceOtherHostiles: surfaceOtherHostiles,
+            warheadDetonatedAt: warheadDetonatedAt ?? (warheadDetonated ? resolvedTimestamp : null));
     }
 
     private static MajorWaveSnapshot CreateWave(
@@ -2777,7 +2892,8 @@ internal static class Program
         DateTime? startedAt = null,
         DateTime? evaluatedAt = null,
         bool? isCatastrophic = null,
-        DateTime? completedAt = null)
+        DateTime? completedAt = null,
+        double? scpCombatEquivalentAtCompletion = null)
     {
         DateTime start = startedAt ?? new DateTime(2026, 8, 23, 12, 0, 0, DateTimeKind.Utc);
         return new MajorWaveSnapshot(
@@ -2789,7 +2905,8 @@ internal static class Program
             isCatastrophic: isCatastrophic ?? survivingCount == 0,
             startedAt: start,
             evaluatedAt: evaluatedAt,
-            completedAt: completedAt);
+            completedAt: completedAt,
+            scpCombatEquivalentAtCompletion: scpCombatEquivalentAtCompletion ?? startingCount);
     }
 
     private static void AssertReadOnly<T>(IReadOnlyList<T> values, string message)

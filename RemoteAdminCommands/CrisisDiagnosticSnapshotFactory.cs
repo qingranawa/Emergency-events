@@ -44,7 +44,12 @@ public static class CrisisDiagnosticSnapshotFactory
             "locked" => Clone(source, warheadUnlocked: false, warheadActive: false, warheadDetonated: false),
             "unlocked" => Clone(source, warheadUnlocked: true, warheadActive: false, warheadDetonated: false),
             "active" => Clone(source, warheadUnlocked: true, warheadActive: true, warheadDetonated: false),
-            "detonated" => Clone(source, warheadUnlocked: true, warheadActive: false, warheadDetonated: true),
+            "detonated" => Clone(
+                source,
+                warheadUnlocked: true,
+                warheadActive: false,
+                warheadDetonated: true,
+                warheadDetonatedAt: source.Timestamp),
             _ => throw new ArgumentOutOfRangeException(nameof(state), "不支持的核弹测试状态。"),
         };
     }
@@ -56,6 +61,7 @@ public static class CrisisDiagnosticSnapshotFactory
             warheadUnlocked: true,
             warheadActive: false,
             warheadDetonated: true,
+            warheadDetonatedAt: source.Timestamp,
             surfaceFoundationCombatants: Math.Max(1, source.SurfaceFoundationCombatants),
             surfaceChaosCombatants: Math.Max(1, source.SurfaceChaosCombatants));
     }
@@ -74,6 +80,7 @@ public static class CrisisDiagnosticSnapshotFactory
         bool? warheadUnlocked = null,
         bool? warheadActive = null,
         bool? warheadDetonated = null,
+        DateTime? warheadDetonatedAt = null,
         int? surfaceFoundationCombatants = null,
         int? surfaceChaosCombatants = null)
     {
@@ -117,6 +124,7 @@ public static class CrisisDiagnosticSnapshotFactory
             surfaceChaosCombatants ?? source.SurfaceChaosCombatants,
             source.SurfaceMainScp,
             source.SurfaceOtherHostiles,
-            scp079TierIsValid ?? source.Scp079TierIsValid);
+            scp079TierIsValid ?? source.Scp079TierIsValid,
+            warheadDetonatedAt: warheadDetonatedAt ?? source.WarheadDetonatedAt);
     }
 }

@@ -2,7 +2,7 @@
 
 > **Current execution status:** Executing directly in the existing workspace per user instruction. No test project or test source will be added; acceptance is build verification plus live EXILED server log verification.
 
-**Goal:** Implement the first runtime version of the Reinforcement System for `emergency-events`, while correcting Round Core SCP allocation so every supported opening composition with at least two SCP slots contains at least two `Scp939` roles and retains `Scp3114` as a possible remaining role.
+**Goal:** Implement the first runtime version of the Reinforcement System for `emergency-events`, while keeping the exact Round Core SCP count and selecting every SCP role from the legal random candidate pool, including `Scp939` and `Scp3114`.
 
 **Architecture:** Keep support-score bookkeeping and decision rules inside `EmergencyEvents.Reinforcement`, and keep EXILED event subscriptions in the manager boundary. Use the native EXILED respawn pipeline: override the selected faction/wave, preserve native wave size and role generation, and only filter Overwatch from the first wave. Do not replace the server's native victory logic, respawn equipment, token system or wave timing beyond the explicitly requested first-wave window.
 
@@ -14,7 +14,7 @@
 - Keep `ExMod.Exiled` pinned at `9.14.2`.
 - Do not add a test project, test source or RA command in this milestone.
 - Keep the existing Round Core exact population table and locked tier behavior unchanged.
-- Guarantee two `Scp939` assignments whenever the exact composition has at least two SCP slots; fill remaining slots from the existing random pool, including `Scp3114`.
+- Do not guarantee `Scp939` or require any particular SCP role; every slot is a legal random candidate and the exact SCP slot count is preserved.
 - Use the verified EXILED 9.14.2 `EscapeScenario` values:
   - `ClassD` -> Chaos +1.
   - `CuffedClassD` -> Foundation +1.
@@ -35,9 +35,8 @@
 
 **Implementation:**
 
-- Build a shuffled list containing two `Scp939` entries when `ScpCount >= 2`.
-- Fill the remaining slots from the existing pool excluding the guaranteed entries, preserving `Scp3114` as a valid candidate.
-- Shuffle the final role list before assigning players so the two `Scp939` slots are not position-fixed.
+- Build exactly `ScpCount` entries by sampling from the existing legal random pool, preserving both `Scp939` and `Scp3114` as candidates without guaranteeing either one.
+- Keep the existing total-count/runtime validation.
 - Keep the existing total-count/runtime validation.
 
 ## Task 2: Add reinforcement configuration and state

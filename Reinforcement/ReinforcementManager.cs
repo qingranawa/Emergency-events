@@ -25,6 +25,7 @@ public sealed class ReinforcementManager
     private const int MaxTimerExtensionRetryCount = 3;
 
     private readonly Config config;
+    private readonly Func<double>? scpCombatEquivalentProvider;
     private readonly List<TimerExtensionWorkItem> pendingNativeWaveCompletions = new List<TimerExtensionWorkItem>();
     private ReinforcementState? state;
     private int spawningFactionTimerExtensionSeconds;
@@ -73,9 +74,10 @@ public sealed class ReinforcementManager
         public double? ChaosTimePassedAfterVanillaReset { get; set; }
     }
 
-    public ReinforcementManager(Config config)
+    public ReinforcementManager(Config config, Func<double>? scpCombatEquivalentProvider = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
+        this.scpCombatEquivalentProvider = scpCombatEquivalentProvider;
         WaveManager.OnWaveSpawned += HandleNativeWaveSpawned;
     }
 
@@ -282,6 +284,7 @@ public sealed class ReinforcementManager
         string faction = observedFaction;
         DateTime completedAt = DateTime.UtcNow;
         string waveId = $"{state.RoundId}-MW-{++state.NextWaveSequence:000}";
+        double? scpCombatEquivalentAtCompletion = CaptureScpCombatEquivalent(state.RoundId, waveId);
         MajorWaveRecord record = state.MajorWaveHistory.Record(
             waveId,
             faction,
@@ -289,11 +292,12 @@ public sealed class ReinforcementManager
             spawnedPlayers.Count,
             spawnedPlayers.Select(player => player.Id),
             pendingStartedAt,
-            completedAt);
+            completedAt,
+            scpCombatEquivalentAtCompletion);
         LogInfo(
             state.RoundId,
             "PrimaryWaveCompleted",
-            $"WaveId={record.WaveId}; Wave={waveName}; Faction={record.Faction}; LockedPopulationTier={record.PopulationTier}; CandidateCount={candidatePlayers.Count}; StartedAt={record.StartedAt:O}; ActualSpawnedCount={record.ActualSpawnedCount}; CompletedAt={record.CompletedAt:O}; MemberCount={record.MemberIds.Count}");
+            $"WaveId={record.WaveId}; Wave={waveName}; Faction={record.Faction}; LockedPopulationTier={record.PopulationTier}; CandidateCount={candidatePlayers.Count}; StartedAt={record.StartedAt:O}; ActualSpawnedCount={record.ActualSpawnedCount}; CompletedAt={record.CompletedAt:O}; MemberCount={record.MemberIds.Count}; ScpCombatEquivalentAtCompletion={FormatOptionalTimerSeconds(record.ScpCombatEquivalentAtCompletion)}");
 
         if (wave is null)
         {
@@ -595,10 +599,18 @@ public sealed class ReinforcementManager
             workItem.ChaosTimerAfterVanillaReset = chaosTimerValue.Timer.TimeLeft.TotalSeconds;
             workItem.FoundationTimePassedAfterVanillaReset = foundationTimerValue.Timer.Base.TimePassed;
             workItem.ChaosTimePassedAfterVanillaReset = chaosTimerValue.Timer.Base.TimePassed;
+            LogDetailed(
+                workItem.RoundId,
+                "TimerExtensionAfterVanillaReset",
+                $"Phase=AFTER_VANILLA_RESET; WaveId={record.WaveId}; WaveFaction={waveFaction}; FoundationTimer={FormatOptionalTimerSeconds(workItem.FoundationTimerAfterVanillaReset)}; ChaosTimer={FormatOptionalTimerSeconds(workItem.ChaosTimerAfterVanillaReset)}; FoundationTimePassed={FormatOptionalTimerSeconds(workItem.FoundationTimePassedAfterVanillaReset)}; ChaosTimePassed={FormatOptionalTimerSeconds(workItem.ChaosTimePassedAfterVanillaReset)}; SpawnIntervalUnchanged=true");
         }
 
         double foundationBeforeExtension = foundationTimerValue.Timer.TimeLeft.TotalSeconds;
         double chaosBeforeExtension = chaosTimerValue.Timer.TimeLeft.TotalSeconds;
+        LogDetailed(
+            workItem.RoundId,
+            "TimerExtensionBefore",
+            $"Phase=BEFORE; WaveId={record.WaveId}; WaveFaction={waveFaction}; FoundationTimer={FormatTimerSeconds(foundationBeforeExtension)}; ChaosTimer={FormatTimerSeconds(chaosBeforeExtension)}; FoundationSpawnInterval={FormatTimerSeconds(foundationTimerValue.Timer.Base.SpawnIntervalSeconds)}; ChaosSpawnInterval={FormatTimerSeconds(chaosTimerValue.Timer.Base.SpawnIntervalSeconds)}");
         if (foundationExtension <= 0)
         {
             workItem.FoundationExtensionApplied = true;
@@ -637,6 +649,10 @@ public sealed class ReinforcementManager
         DateTime appliedAt = DateTime.UtcNow;
         double foundationAfterExtension = foundationTimerValue.Timer.TimeLeft.TotalSeconds;
         double chaosAfterExtension = chaosTimerValue.Timer.TimeLeft.TotalSeconds;
+        LogDetailed(
+            workItem.RoundId,
+            "TimerExtensionAfterEEExtension",
+            $"Phase=AFTER_EE_EXTENSION; WaveId={record.WaveId}; WaveFaction={waveFaction}; FoundationTimer={FormatTimerSeconds(foundationAfterExtension)}; ChaosTimer={FormatTimerSeconds(chaosAfterExtension)}; FoundationTimePassed={FormatTimerSeconds(foundationTimerValue.Timer.Base.TimePassed)}; ChaosTimePassed={FormatTimerSeconds(chaosTimerValue.Timer.Base.TimePassed)}; FoundationSpawnInterval={FormatTimerSeconds(foundationTimerValue.Timer.Base.SpawnIntervalSeconds)}; ChaosSpawnInterval={FormatTimerSeconds(chaosTimerValue.Timer.Base.SpawnIntervalSeconds)}; SpawnIntervalUnchanged=true");
         double delayAfterWaveCompletionMs = Math.Max(0, (appliedAt - record.CompletedAt).TotalMilliseconds);
         LogInfo(
             workItem.RoundId,
@@ -705,7 +721,10 @@ public sealed class ReinforcementManager
     private static void AddTimerExtension(TimedWave timedWave, int extensionSeconds)
     {
         Respawning.Waves.WaveTimer timer = timedWave.Timer.Base;
-        timer.SpawnIntervalSeconds += extensionSeconds;
+        double adjustedTimePassed = PrimaryWaveTimerExtensionPolicy.ApplyExtensionToTimePassed(
+            timer.TimePassed,
+            extensionSeconds);
+        timer.SetTime((float)adjustedTimePassed);
     }
 
     private void TrySendTimerUpdate(long roundId, TimedWave timedWave)
@@ -781,6 +800,31 @@ public sealed class ReinforcementManager
         return seconds.HasValue
             ? FormatTimerSeconds(seconds.Value)
             : "Unavailable";
+    }
+
+    private double? CaptureScpCombatEquivalent(long roundId, string waveId)
+    {
+        if (scpCombatEquivalentProvider is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            double value = scpCombatEquivalentProvider();
+            if (double.IsNaN(value) || double.IsInfinity(value) || value < 0d)
+            {
+                LogWarn(roundId, "PrimaryWaveFactUnavailable", $"WaveId={waveId}; Fact=ScpCombatEquivalentAtCompletion; Reason=InvalidProviderValue");
+                return null;
+            }
+
+            return value;
+        }
+        catch (Exception exception)
+        {
+            LogWarn(roundId, "PrimaryWaveFactUnavailable", $"WaveId={waveId}; Fact=ScpCombatEquivalentAtCompletion; Reason={exception.GetType().Name}");
+            return null;
+        }
     }
 
     private void ScheduleSurvivalObservation(long roundId, MajorWaveRecord record)

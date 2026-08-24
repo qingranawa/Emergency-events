@@ -89,4 +89,17 @@ public static class PrimaryWaveTimerExtensionPolicy
     {
         return currentSeconds + Math.Max(0, extensionSeconds);
     }
+
+    /// <summary>
+    /// 只调整当前 WaveTimer 的 TimePassed，使当前剩余时间增加，不修改原版 interval。
+    /// </summary>
+    public static double ApplyExtensionToTimePassed(double currentTimePassedSeconds, int extensionSeconds)
+    {
+        if (double.IsNaN(currentTimePassedSeconds) || double.IsInfinity(currentTimePassedSeconds))
+        {
+            return currentTimePassedSeconds;
+        }
+
+        return currentTimePassedSeconds - Math.Max(0, extensionSeconds);
+    }
 }

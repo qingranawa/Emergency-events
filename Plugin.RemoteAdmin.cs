@@ -186,7 +186,7 @@ public sealed partial class Plugin
             "round" or "roundcore" or "m01" => $"【M01 Round Core】\n状态：{GetModuleState(Config.RoundCoreEnabled, roundCoreManager?.State is not null)}\n锁定回合：{roundCoreManager?.State?.RoundId.ToString() ?? "暂无"}\n开局人数：{roundCoreManager?.State?.StartPopulation.ToString() ?? "暂无"}",
             "reinforcement" or "wave" or "m02" => $"【M02 Reinforcement】\n状态：{GetModuleState(Config.ReinforcementEnabled, reinforcementManager?.IsRoundActive == true)}\nMini-Wave 禁用：{FormatBoolean(Config.DisableMiniWaves)}\nWaveHistory：{reinforcementManager?.GetMajorWaveRecords().Count ?? 0}",
             "dlrc" or "m03" => $"【M03 D-LRC】\n状态：{GetModuleState(Config.DlrcEvaluatorEnabled, dlrcEvaluatorService?.IsActive == true)}\n正在评估：{FormatBoolean(dlrcEvaluatorService?.IsEvaluating == true)}\n最后触发：{dlrcEvaluatorService?.LastTrigger.ToString() ?? "暂无"}",
-            "crisis" or "m04" => $"【M04 Crisis】\n状态：{GetModuleState(Config.CrisisSystemEnabled, crisisManager is not null && runtimeCoordinator?.IsEmergencyEventsActiveForRound == true)}\n最近危机结果：{crisisManager?.CurrentCrisisAssessment?.Code ?? "暂无"}\nWAR：NOT_IMPLEMENTED（等待未来 GOC 核弹规则）",
+            "crisis" or "m04" => $"【M04 Crisis】\n状态：{GetModuleState(Config.CrisisSystemEnabled, crisisManager is not null && runtimeCoordinator?.IsEmergencyEventsActiveForRound == true)}\n最近危机结果：{crisisManager?.CurrentCrisisAssessment?.Code ?? "暂无"}\nWAR：{FormatWarModuleState()}",
             _ => "未知模块。使用 ee module <round|reinforcement|dlrc|crisis>。",
         };
         return normalized is "round" or "roundcore" or "m01" or "reinforcement" or "wave" or "m02" or "dlrc" or "m03" or "crisis" or "m04";
@@ -446,12 +446,6 @@ public sealed partial class Plugin
         StringBuilder builder = new StringBuilder("【危机状态】\n");
         foreach (CrisisTag tag in Enum.GetValues(typeof(CrisisTag)))
         {
-            if (tag == CrisisTag.WAR)
-            {
-                builder.AppendLine("核危机（WAR）：未实现（等待 GOC 核弹规则）");
-                continue;
-            }
-
             if (!assessment.Detections.TryGetValue(tag, out CrisisDetectionResult? detection))
             {
                 builder.AppendLine($"{DlrcStageReportFormatter.FormatCrisisTag(tag)}：数据不足");
@@ -466,9 +460,22 @@ public sealed partial class Plugin
         return true;
     }
 
+    private string FormatWarModuleState()
+    {
+        CrisisDetectionResult? detection = crisisManager?.CurrentCrisisAssessment is CrisisAssessment assessment
+            && assessment.Detections.TryGetValue(CrisisTag.WAR, out CrisisDetectionResult? warDetection)
+            ? warDetection
+            : null;
+        return detection is null
+            ? "暂无"
+            : detection.IsActive
+                ? $"{(int)detection.Severity}级"
+                : "未激活";
+    }
+
     private bool TryFormatCrisisList(out string response)
     {
-        response = "【危机列表】\n生化危机（BIO）\n系统危机（SYS）\n收容危机（CON）\n安全危机（SEC）\nGOI危机（GOI）\n核危机（WAR）：未实现，等待 GOC 核弹规则\n终局危机（END）";
+        response = "【危机列表】\n生化危机（BIO）\n系统危机（SYS）\n收容危机（CON）\n安全危机（SEC）\nGOI危机（GOI）\n核危机（WAR）\n终局危机（END）";
         return true;
     }
 
@@ -517,14 +524,11 @@ public sealed partial class Plugin
 
     private bool TryRunWarSimulation(string state, out string response)
     {
-        if (!TryGetLatestDlrc(out RoundSnapshot? snapshot, out _, out response))
-        {
-            return false;
-        }
-
-        _ = CrisisDiagnosticSnapshotFactory.WithWarheadState(snapshot!, state);
-        response = $"【核危机测试】\nDRY RUN：是\n模拟核弹状态：{state}\nWAR 当前未实现；此命令不会启动、取消或爆炸真实核弹。";
-        return true;
+        return TryRunSimulation(
+            CrisisTag.WAR,
+            snapshot => CrisisDiagnosticSnapshotFactory.WithWarheadState(snapshot, state),
+            $"WAR 模拟核弹状态={state}",
+            out response);
     }
 
     private bool TryRunContainmentCheckpoint(bool commit, out string response)

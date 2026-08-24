@@ -17,7 +17,8 @@ public sealed class MajorWaveRecord
         int actualSpawnedCount,
         IEnumerable<int>? memberIds,
         DateTime startedAt,
-        DateTime completedAt)
+        DateTime completedAt,
+        double? scpCombatEquivalentAtCompletion = null)
     {
         WaveId = string.IsNullOrWhiteSpace(waveId) ? string.Empty : waveId;
         Faction = string.IsNullOrWhiteSpace(faction) ? string.Empty : faction;
@@ -25,6 +26,7 @@ public sealed class MajorWaveRecord
         ActualSpawnedCount = Math.Max(0, actualSpawnedCount);
         StartedAt = startedAt;
         CompletedAt = completedAt;
+        ScpCombatEquivalentAtCompletion = scpCombatEquivalentAtCompletion;
         List<int> copiedIds = memberIds is null ? new List<int>() : new List<int>(memberIds);
         MemberIds = copiedIds.AsReadOnly();
     }
@@ -42,6 +44,8 @@ public sealed class MajorWaveRecord
     public DateTime StartedAt { get; }
 
     public DateTime CompletedAt { get; }
+
+    public double? ScpCombatEquivalentAtCompletion { get; }
 
     public bool IsPostMajorWavePublished { get; private set; }
 
@@ -102,7 +106,8 @@ public sealed class MajorWaveRecord
             startedAt: StartedAt,
             evaluatedAt: SurvivalObservedAt,
             memberIds: MemberIds,
-            completedAt: CompletedAt);
+            completedAt: CompletedAt,
+            scpCombatEquivalentAtCompletion: ScpCombatEquivalentAtCompletion);
     }
 }
 
@@ -158,7 +163,8 @@ public sealed class MajorWaveHistory
         int actualSpawnedCount,
         IEnumerable<int>? memberIds,
         DateTime startedAt,
-        DateTime completedAt)
+        DateTime completedAt,
+        double? scpCombatEquivalentAtCompletion = null)
     {
         foreach (MajorWaveRecord existingRecord in records)
         {
@@ -175,7 +181,8 @@ public sealed class MajorWaveHistory
             actualSpawnedCount,
             memberIds,
             startedAt,
-            completedAt);
+            completedAt,
+            scpCombatEquivalentAtCompletion);
         PreviousMajorWave = LastMajorWave;
         LastMajorWave = record;
         CurrentWave = record;

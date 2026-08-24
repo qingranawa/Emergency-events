@@ -279,7 +279,7 @@ public sealed class RoundCoreManager
 
     private List<RoleTypeId> BuildScpRoles(int count)
     {
-        return ScpRolePolicy.BuildRoles(count, ScpRolePool, RoleTypeId.Scp939, random);
+        return ScpRolePolicy.BuildRoles(count, ScpRolePool, random);
     }
 
     private static void AddAssignments(

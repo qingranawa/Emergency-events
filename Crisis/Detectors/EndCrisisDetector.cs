@@ -29,7 +29,12 @@ public sealed class EndCrisisDetector : ICrisisDetector
             return CreateInactive(snapshot, "WarheadDetonated=false", 0d);
         }
 
-        state.ObserveWarheadDetonation(snapshot.Timestamp);
+        if (!snapshot.WarheadDetonatedAt.HasValue)
+        {
+            state.ResetEndgame();
+            return CreateInactive(snapshot, "WarheadDetonatedAtUnavailable", 0d);
+        }
+
         if (!HasSurfaceHostileStalemate(snapshot))
         {
             state.ResetSurfaceStalemate();
@@ -86,6 +91,7 @@ public sealed class EndCrisisDetector : ICrisisDetector
             ["SurfaceChaosCombatants"] = snapshot.SurfaceChaosCombatants,
             ["SurfaceMainScp"] = snapshot.SurfaceMainScp,
             ["SurfaceOtherHostiles"] = snapshot.SurfaceOtherHostiles,
+            ["WarheadDetonatedAtTicks"] = snapshot.WarheadDetonatedAt?.Ticks ?? 0d,
             ["ContinuousStalemateSeconds"] = durationSeconds,
         };
     }

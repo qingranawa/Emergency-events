@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using EmergencyEvents.Crisis;
 using Exiled.API.Features;
 using Exiled.Events.EventArgs.Player;
@@ -9,18 +10,21 @@ using ServerEvents = Exiled.Events.Handlers.Server;
 using WarheadEvents = Exiled.Events.Handlers.Warhead;
 using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RoundCore;
+using EmergencyEvents.Runtime;
+using MEC;
 
 namespace EmergencyEvents;
 
 /// <summary>
 /// emergency-events 主插件入口。
 /// </summary>
-public sealed class Plugin : Plugin<Config>
+public sealed partial class Plugin : Plugin<Config>
 {
     private RoundCoreManager? roundCoreManager;
     private ReinforcementManager? reinforcementManager;
     private DlrcEvaluatorService? dlrcEvaluatorService;
     private CrisisManager? crisisManager;
+    private PluginRuntimeCoordinator? runtimeCoordinator;
 
     public override string Name => "EmergencyEvents";
 
@@ -44,6 +48,8 @@ public sealed class Plugin : Plugin<Config>
     /// 对后续 Module 05 提供当前回合最后一份有效危机评估。
     /// </summary>
     public CrisisAssessment? CurrentCrisisAssessment => crisisManager?.CurrentCrisisAssessment;
+
+    public PluginRuntimeCoordinator? Runtime => runtimeCoordinator;
 
     /// <summary>
     /// 由 Remote Admin 请求一次立即 D-LRC 评估，不干预周期调度。
@@ -82,6 +88,9 @@ public sealed class Plugin : Plugin<Config>
     public override void OnEnabled()
     {
         Instance = this;
+        runtimeCoordinator = new PluginRuntimeCoordinator(
+            Config.EmergencyEventsEnabled,
+            Config.MinimumPlayers);
         roundCoreManager = new RoundCoreManager(Config);
         reinforcementManager = new ReinforcementManager(Config);
         dlrcEvaluatorService = new DlrcEvaluatorService(Config);
@@ -102,6 +111,8 @@ public sealed class Plugin : Plugin<Config>
         ServerEvents.RespawningTeam += OnRespawningTeam;
         ServerEvents.RespawnedTeam += OnRespawnedTeam;
         ServerEvents.RoundEnded += OnRoundEnded;
+        PlayerEvents.Joined += OnPlayerJoined;
+        PlayerEvents.Left += OnPlayerLeft;
         PlayerEvents.Died += OnPlayerDied;
         WarheadEvents.Stopping += OnWarheadStopping;
 
@@ -119,6 +130,8 @@ public sealed class Plugin : Plugin<Config>
         ServerEvents.RespawningTeam -= OnRespawningTeam;
         ServerEvents.RespawnedTeam -= OnRespawnedTeam;
         ServerEvents.RoundEnded -= OnRoundEnded;
+        PlayerEvents.Joined -= OnPlayerJoined;
+        PlayerEvents.Left -= OnPlayerLeft;
         PlayerEvents.Died -= OnPlayerDied;
         WarheadEvents.Stopping -= OnWarheadStopping;
 
@@ -143,6 +156,7 @@ public sealed class Plugin : Plugin<Config>
         reinforcementManager = null;
         roundCoreManager?.CleanupRound();
         roundCoreManager = null;
+        runtimeCoordinator = null;
         if (ReferenceEquals(Instance, this))
         {
             Instance = null;
@@ -158,6 +172,7 @@ public sealed class Plugin : Plugin<Config>
         crisisManager?.CleanupRound();
         reinforcementManager?.ResetForWaitingForPlayers();
         roundCoreManager?.ResetForWaitingForPlayers();
+        runtimeCoordinator?.EnterWaitingForPlayers();
     }
 
     private void OnRestartingRound()
@@ -167,15 +182,20 @@ public sealed class Plugin : Plugin<Config>
             () => reinforcementManager?.CleanupRound(),
             () => roundCoreManager?.CleanupRound());
         crisisManager?.CleanupRound();
+        runtimeCoordinator?.EndRound();
     }
 
     private void OnRoundStarted()
     {
-        if (roundCoreManager?.State is null)
+        int openingPopulation = roundCoreManager?.GetCurrentOpeningPopulation() ?? 0;
+        runtimeCoordinator?.BeginRound(openingPopulation);
+        if (!IsEmergencyEventsActiveForRound())
         {
-            roundCoreManager?.CaptureRoundStart();
+            LogActivationDecision(openingPopulation, "InsufficientPopulationOrDisabled");
+            return;
         }
 
+        roundCoreManager?.CaptureRoundStart();
         long roundId = roundCoreManager?.State?.RoundId ?? 0;
         reinforcementManager?.StartRound(
             roundId,
@@ -185,6 +205,12 @@ public sealed class Plugin : Plugin<Config>
 
     private void OnAllPlayersSpawned()
     {
+        EvaluateCurrentPopulation();
+        if (!IsEmergencyEventsActiveForRound())
+        {
+            return;
+        }
+
         if (roundCoreManager?.State is null)
         {
             roundCoreManager?.CaptureRoundStart();
@@ -199,6 +225,17 @@ public sealed class Plugin : Plugin<Config>
         crisisManager?.CleanupRound();
         reinforcementManager?.CleanupRound();
         roundCoreManager?.CleanupRound();
+        runtimeCoordinator?.EndRound();
+    }
+
+    private void OnPlayerJoined(JoinedEventArgs _)
+    {
+        SchedulePopulationEvaluation();
+    }
+
+    private void OnPlayerLeft(LeftEventArgs _)
+    {
+        SchedulePopulationEvaluation();
     }
 
     private void OnPlayerDied(DiedEventArgs ev)
@@ -230,6 +267,45 @@ public sealed class Plugin : Plugin<Config>
     private void OnMajorWaveCompleted(MajorWaveCompletedEvent ev)
     {
         dlrcEvaluatorService?.HandleMajorWaveCompleted(ev);
+    }
+
+    private bool IsEmergencyEventsActiveForRound()
+    {
+        return runtimeCoordinator?.IsEmergencyEventsActiveForRound == true;
+    }
+
+    private void SchedulePopulationEvaluation()
+    {
+        Timing.CallDelayed(0.1f, EvaluateCurrentPopulation);
+    }
+
+    private void EvaluateCurrentPopulation()
+    {
+        if (runtimeCoordinator?.ObservePopulation(GetCurrentOnlinePopulation()) != true)
+        {
+            return;
+        }
+
+        SuspendEmergencyEventsForRound("InsufficientPopulation");
+    }
+
+    private void SuspendEmergencyEventsForRound(string reason)
+    {
+        reinforcementManager?.SuspendRound(reason);
+        dlrcEvaluatorService?.SuspendRound(reason);
+        Log.Info(
+            $"[EmergencyEvents][Activation] RuntimeState={runtimeCoordinator?.State}; CurrentPlayers={runtimeCoordinator?.CurrentPopulation ?? 0}; MinimumPlayers={runtimeCoordinator?.MinimumPlayers ?? 0}; Decision={runtimeCoordinator?.State}; Reason={reason}");
+    }
+
+    private void LogActivationDecision(int currentPlayers, string reason)
+    {
+        Log.Info(
+            $"[EmergencyEvents][Activation] CurrentPlayers={currentPlayers}; MinimumPlayers={runtimeCoordinator?.MinimumPlayers ?? 0}; RuntimeState={runtimeCoordinator?.State}; Decision=VANILLA_ROUND; EmergencyEventsActive=false; Reason={reason}");
+    }
+
+    private static int GetCurrentOnlinePopulation()
+    {
+        return Player.Enumerable.Count(player => player.IsConnected);
     }
 
     private void OnDlrcEvaluationCompleted(DlrcEvaluationCompletedEvent completedEvent)

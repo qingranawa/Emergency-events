@@ -42,6 +42,20 @@ public sealed class CrisisState
         ContainmentFailureStreak = 0;
     }
 
+    /// <summary>
+    /// 仅供诊断层把已存在的检查点推进到当前快照时间。
+    /// </summary>
+    internal bool TryForceContainmentCheckpoint(DateTime checkpointAt)
+    {
+        if (!ContainmentBaselineEquivalent.HasValue || !NextContainmentCheckpointAt.HasValue)
+        {
+            return false;
+        }
+
+        NextContainmentCheckpointAt = checkpointAt;
+        return true;
+    }
+
     public void ObserveWarheadDetonation(DateTime timestamp)
     {
         WarheadDetonatedAt ??= timestamp;
@@ -67,5 +81,21 @@ public sealed class CrisisState
     {
         ResetContainment();
         ResetEndgame();
+    }
+
+    /// <summary>
+    /// 为 RA 诊断创建独立副本，避免 Dry Run 改写正式回合状态。
+    /// </summary>
+    public CrisisState Clone()
+    {
+        return new CrisisState
+        {
+            SecondMajorWaveCompletedAt = SecondMajorWaveCompletedAt,
+            ContainmentBaselineEquivalent = ContainmentBaselineEquivalent,
+            NextContainmentCheckpointAt = NextContainmentCheckpointAt,
+            ContainmentFailureStreak = ContainmentFailureStreak,
+            WarheadDetonatedAt = WarheadDetonatedAt,
+            SurfaceStalemateStartedAt = SurfaceStalemateStartedAt,
+        };
     }
 }

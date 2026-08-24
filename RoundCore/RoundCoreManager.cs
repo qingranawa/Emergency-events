@@ -39,6 +39,11 @@ public sealed class RoundCoreManager
 
     public RoundCoreState? State => state;
 
+    public int GetCurrentOpeningPopulation()
+    {
+        return GetOpeningRoster().Count;
+    }
+
     public void ResetForWaitingForPlayers()
     {
         RestoreBadges();

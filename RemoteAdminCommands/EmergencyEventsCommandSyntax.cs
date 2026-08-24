@@ -17,6 +17,17 @@ public static class EmergencyEventsCommandSyntax
         }
 
         string root = Normalize(values[0]);
+        if (root == "help")
+        {
+            return TryParseHelp(values, out request);
+        }
+
+        if (root == "round" && values.Length == 2 && Normalize(values[1]) == "state")
+        {
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.Round);
+            return true;
+        }
+
         if (TryParseSimpleRoot(root, values.Length, out request))
         {
             return true;
@@ -61,7 +72,6 @@ public static class EmergencyEventsCommandSyntax
     {
         kind = value switch
         {
-            "help" => EmergencyEventsCommandKind.Help,
             "status" => EmergencyEventsCommandKind.Status,
             "enable" or "on" => EmergencyEventsCommandKind.Enable,
             "disable" or "off" => EmergencyEventsCommandKind.Disable,
@@ -87,6 +97,24 @@ public static class EmergencyEventsCommandSyntax
         return Reject(out request);
     }
 
+    private static bool TryParseHelp(string[] values, out EmergencyEventsCommandRequest request)
+    {
+        if (values.Length == 1)
+        {
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.Help);
+            return true;
+        }
+
+        string target = values.Length == 2 ? Normalize(values[1]) : string.Empty;
+        if (target is "wave" or "dlrc" or "crisis" or "test")
+        {
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.Help, target: target);
+            return true;
+        }
+
+        return Reject(out request);
+    }
+
     private static bool TryParseWave(string[] values, out EmergencyEventsCommandRequest request)
     {
         if (values.Length == 1)
@@ -102,12 +130,20 @@ public static class EmergencyEventsCommandSyntax
             return true;
         }
 
-        if (subcommand == "history" && values.Length is 3 or 4 && int.TryParse(values[2], out int count) && count > 0)
+        if (subcommand == "history" && values.Length == 3 && int.TryParse(values[2], out int count) && count > 0)
         {
-            bool isDetail = values.Length == 4 && Normalize(values[3]) == "detail";
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.WaveHistory, number: count);
+            return true;
+        }
+
+        if (subcommand == "history"
+            && values.Length == 4
+            && Normalize(values[3]) == "detail"
+            && !string.IsNullOrWhiteSpace(values[2]))
+        {
             request = new EmergencyEventsCommandRequest(
-                isDetail ? EmergencyEventsCommandKind.WaveHistoryDetail : EmergencyEventsCommandKind.WaveHistory,
-                number: count);
+                EmergencyEventsCommandKind.WaveHistoryDetail,
+                target: Normalize(values[2]));
             return true;
         }
 
@@ -146,6 +182,21 @@ public static class EmergencyEventsCommandSyntax
             return true;
         }
 
+        if (subcommand == "stage" && values.Length == 3)
+        {
+            EmergencyEventsCommandKind stageKind = Normalize(values[2]) switch
+            {
+                "full" => EmergencyEventsCommandKind.DlrcStageFull,
+                "raw" => EmergencyEventsCommandKind.DlrcStageRaw,
+                _ => EmergencyEventsCommandKind.Invalid,
+            };
+            if (stageKind != EmergencyEventsCommandKind.Invalid)
+            {
+                request = new EmergencyEventsCommandRequest(stageKind);
+                return true;
+            }
+        }
+
         if (subcommand == "history" && values.Length == 3 && int.TryParse(values[2], out int count) && count > 0)
         {
             request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.DlrcHistory, number: count);
@@ -161,6 +212,7 @@ public static class EmergencyEventsCommandSyntax
         {
             "state" => EmergencyEventsCommandKind.DlrcState,
             "evaluate" => EmergencyEventsCommandKind.DlrcEvaluate,
+            "stage" => EmergencyEventsCommandKind.DlrcStage,
             "breakdown" => EmergencyEventsCommandKind.DlrcBreakdown,
             "control" => EmergencyEventsCommandKind.DlrcControl,
             "history" => EmergencyEventsCommandKind.DlrcHistory,

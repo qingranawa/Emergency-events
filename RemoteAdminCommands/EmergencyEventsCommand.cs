@@ -1,6 +1,8 @@
 using System;
+using System.Diagnostics;
 using CommandSystem;
-using EmergencyEvents.Evaluation;
+using Exiled.API.Features;
+using Exiled.Permissions.Extensions;
 
 namespace EmergencyEvents.RemoteAdminCommands;
 
@@ -24,10 +26,9 @@ public sealed class EmergencyEventsCommand : ICommand
             Array.Copy(arguments.Array, arguments.Offset, values, 0, arguments.Count);
         }
 
-        if (!EmergencyEventsCommandSyntax.IsDlrcEvaluate(values)
-            && !EmergencyEventsCommandSyntax.IsDlrcState(values))
+        if (!EmergencyEventsCommandSyntax.TryParse(values, out EmergencyEventsCommandRequest request))
         {
-            response = "用法：ee dlrc evaluate | ee dlrc state";
+            response = "未知 EmergencyEvents 命令。使用 ee help 查看可用命令。";
             return false;
         }
 
@@ -38,11 +39,64 @@ public sealed class EmergencyEventsCommand : ICommand
             return false;
         }
 
-        if (EmergencyEventsCommandSyntax.IsDlrcState(values))
+        if (!sender.CheckPermission("emergencyevents.ra"))
         {
-            return plugin.TryGetDlrcState(out response);
+            response = "你没有 emergencyevents.ra 权限。";
+            return false;
         }
 
-        return plugin.TryEvaluateDlrcImmediately(out DlrcEvaluationResult? _, out response);
+        if (RequiresDebugPermission(request.Kind)
+            && (!sender.CheckPermission("emergencyevents.ra.debug")
+                || (IsTestCommand(request.Kind) && !plugin.DebugCommandsEnabled)))
+        {
+            response = IsTestCommand(request.Kind) && !plugin.DebugCommandsEnabled
+                ? "DebugCommandsEnabled=false，ee test 当前已关闭。"
+                : "你没有 emergencyevents.ra.debug 权限。";
+            return false;
+        }
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        bool succeeded = plugin.TryExecuteRemoteAdminCommand(request, out response);
+        stopwatch.Stop();
+        LogCommand(request.Kind, plugin.Runtime?.State, succeeded, stopwatch.ElapsedMilliseconds);
+        return succeeded;
+    }
+
+    private static bool RequiresDebugPermission(EmergencyEventsCommandKind kind)
+    {
+        return IsTestCommand(kind) || kind == EmergencyEventsCommandKind.DlrcStageRaw;
+    }
+
+    private static bool IsTestCommand(EmergencyEventsCommandKind kind)
+    {
+        return kind is EmergencyEventsCommandKind.TestCrisisAll
+            or EmergencyEventsCommandKind.TestCrisisCheck
+            or EmergencyEventsCommandKind.TestCrisisBioZombies
+            or EmergencyEventsCommandKind.TestCrisisSysTier
+            or EmergencyEventsCommandKind.TestCrisisSec
+            or EmergencyEventsCommandKind.TestCrisisWar
+            or EmergencyEventsCommandKind.TestCrisisConCheckpoint
+            or EmergencyEventsCommandKind.TestCrisisConCheckpointCommit
+            or EmergencyEventsCommandKind.TestCrisisEndCheck
+            or EmergencyEventsCommandKind.TestCrisisEndSimulate
+            or EmergencyEventsCommandKind.TestCleanupVerify;
+    }
+
+    private static void LogCommand(
+        EmergencyEventsCommandKind kind,
+        Runtime.PluginRuntimeState? runtimeState,
+        bool succeeded,
+        long elapsedMilliseconds)
+    {
+        string message = $"[EmergencyEvents][RA] Command={kind}; RuntimeState={runtimeState?.ToString() ?? "ERROR"}; Result={(succeeded ? "Success" : "Rejected")}; DurationMs={elapsedMilliseconds}";
+        if (kind is EmergencyEventsCommandKind.Enable
+            or EmergencyEventsCommandKind.Disable
+            or EmergencyEventsCommandKind.TestCrisisConCheckpointCommit)
+        {
+            Log.Info(message);
+            return;
+        }
+
+        Log.Debug(message);
     }
 }

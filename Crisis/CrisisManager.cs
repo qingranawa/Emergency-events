@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using EmergencyEvents.Crisis.Detectors;
+using EmergencyEvents.Evaluation;
 
 namespace EmergencyEvents.Crisis;
 
@@ -85,6 +86,114 @@ public sealed class CrisisManager
         return current;
     }
 
+    /// <summary>
+    /// 使用正式判定器检查指定危机，但不写入真实回合状态。
+    /// </summary>
+    public bool TryDiagnose(
+        CrisisTag tag,
+        RoundSnapshot snapshot,
+        DlrcEvaluationResult result,
+        out CrisisDetectionResult? detection)
+    {
+        if (snapshot is null)
+        {
+            throw new ArgumentNullException(nameof(snapshot));
+        }
+
+        if (result is null)
+        {
+            throw new ArgumentNullException(nameof(result));
+        }
+
+        ICrisisDetector? detector = FindDetector(tag);
+        if (detector is null)
+        {
+            detection = null;
+            return false;
+        }
+
+        CrisisState diagnosticState = state.Clone();
+        CrisisContext context = new CrisisContext(
+            evaluationId: 0L,
+            trigger: DlrcEvaluationTrigger.MANUAL_RA,
+            previousAssessment: CurrentCrisisAssessment);
+        detection = detector.Detect(snapshot, result, diagnosticState, context);
+        return true;
+    }
+
+    /// <summary>
+    /// 以正式 CON 判定器执行一次强制检查点，默认只作用于状态副本。
+    /// </summary>
+    public bool TryRunContainmentCheckpoint(
+        RoundSnapshot snapshot,
+        DlrcEvaluationResult result,
+        bool commit,
+        out CrisisDetectionResult? detection)
+    {
+        if (snapshot is null)
+        {
+            throw new ArgumentNullException(nameof(snapshot));
+        }
+
+        if (result is null)
+        {
+            throw new ArgumentNullException(nameof(result));
+        }
+
+        ConCrisisDetector? detector = FindDetector(CrisisTag.CON) as ConCrisisDetector;
+        CrisisState targetState = commit ? state : state.Clone();
+        if (detector is null || !targetState.TryForceContainmentCheckpoint(snapshot.Timestamp))
+        {
+            detection = null;
+            return false;
+        }
+
+        detection = detector.Detect(
+            snapshot,
+            result,
+            targetState,
+            new CrisisContext(trigger: DlrcEvaluationTrigger.MANUAL_RA, previousAssessment: CurrentCrisisAssessment));
+        return true;
+    }
+
+    /// <summary>
+    /// 使用正式 END 判定器模拟连续地表僵持时长，不修改服务器时间或真实状态。
+    /// </summary>
+    public bool TryDiagnoseEndSimulation(
+        RoundSnapshot snapshot,
+        DlrcEvaluationResult result,
+        int simulatedSeconds,
+        out CrisisDetectionResult? detection)
+    {
+        if (snapshot is null)
+        {
+            throw new ArgumentNullException(nameof(snapshot));
+        }
+
+        if (result is null)
+        {
+            throw new ArgumentNullException(nameof(result));
+        }
+
+        EndCrisisDetector? detector = FindDetector(CrisisTag.END) as EndCrisisDetector;
+        if (detector is null || !snapshot.WarheadDetonated)
+        {
+            detection = null;
+            return false;
+        }
+
+        CrisisState diagnosticState = state.Clone();
+        diagnosticState.ResetEndgame();
+        diagnosticState.ObserveWarheadDetonation(snapshot.Timestamp);
+        diagnosticState.StartSurfaceStalemate(snapshot.Timestamp.AddSeconds(-Math.Max(0, simulatedSeconds)));
+        detection = detector.Detect(
+            snapshot,
+            result,
+            diagnosticState,
+            new CrisisContext(trigger: DlrcEvaluationTrigger.MANUAL_RA, previousAssessment: CurrentCrisisAssessment));
+        return true;
+    }
+
     public void CleanupRound()
     {
         state.Reset();
@@ -109,5 +218,28 @@ public sealed class CrisisManager
         }
 
         return false;
+    }
+
+    private ICrisisDetector? FindDetector(CrisisTag tag)
+    {
+        foreach (ICrisisDetector detector in detectors)
+        {
+            if (MatchesTag(detector, tag))
+            {
+                return detector;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool MatchesTag(ICrisisDetector detector, CrisisTag tag)
+    {
+        return (tag == CrisisTag.BIO && detector is BioCrisisDetector)
+            || (tag == CrisisTag.SYS && detector is SysCrisisDetector)
+            || (tag == CrisisTag.CON && detector is ConCrisisDetector)
+            || (tag == CrisisTag.SEC && detector is SecCrisisDetector)
+            || (tag == CrisisTag.GOI && detector is GoiCrisisDetector)
+            || (tag == CrisisTag.END && detector is EndCrisisDetector);
     }
 }

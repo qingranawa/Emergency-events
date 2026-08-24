@@ -103,7 +103,16 @@ internal static class Program
             ("RA 状态报告包含人口、响应、危机与积分", DlrcStateReportContainsRequiredFacts),
             ("低人口暂停在本回合不可逆并在下一局重新判定", LowPopulationSuspensionIsRoundLocked),
             ("管理员启停不会在进行中的回合重跑 Round Core", EnableDisableDefersRoundActivation),
+            ("命令守卫在低人口暂停时保留查询并拒绝真实评估", CommandGuardPreservesQueriesDuringSuspension),
             ("RA 根命令树精确识别支持的诊断和测试请求", EmergencyEventsCommandSyntaxRecognizesCommandTree),
+            ("RA 命令树支持 WaveId 详情与 D-LRC 战局展示模式", EmergencyEventsCommandSyntaxRecognizesWaveIdAndStageModes),
+            ("危机诊断复用正式 Detector 且不写入真实评估状态", CrisisDiagnosticsAreReadOnly),
+            ("危机 Dry Run 快照只覆盖指定输入而不修改原快照", CrisisDiagnosticSnapshotFactoryPreservesSource),
+            ("D-LRC 标准战局报告使用中文字段且不泄漏内部值", DlrcStageReportUsesChineseFields),
+            ("完整 D-LRC 代码只接受同一次危机评估", DlrcDisplayCodeRequiresSynchronizedAssessment),
+            ("CON 快速检查默认只读而 commit 才推进正式状态", ContainmentDiagnosticCommitIsExplicit),
+            ("END 快速模拟使用正式 Detector 且不改变真实时间", EndDiagnosticSimulationUsesIsolatedState),
+            ("RA 语法接受 round state 作为 round 查询别名", EmergencyEventsCommandSyntaxRecognizesRoundStateAlias),
         };
 
         string requestedModule = args.Length == 0 ? "ALL" : args[0].ToUpperInvariant();
@@ -571,6 +580,35 @@ internal static class Program
         AssertEqual(PluginRuntimeState.ACTIVE, coordinator.State, "下一局必须按新的启用标记激活");
     }
 
+    private static void CommandGuardPreservesQueriesDuringSuspension()
+    {
+        AssertTrue(
+            EmergencyEventsCommandGuard.IsAllowed(
+                EmergencyEventsCommandKind.Status,
+                PluginRuntimeState.LOW_POPULATION_SUSPENDED),
+            "低人口暂停时 status 必须仍可查询");
+        AssertTrue(
+            EmergencyEventsCommandGuard.IsAllowed(
+                EmergencyEventsCommandKind.Round,
+                PluginRuntimeState.STANDBY),
+            "STANDBY 时 round 必须仍可查询");
+        AssertTrue(
+            !EmergencyEventsCommandGuard.IsAllowed(
+                EmergencyEventsCommandKind.DlrcEvaluate,
+                PluginRuntimeState.LOW_POPULATION_SUSPENDED),
+            "低人口暂停时不得运行真实 D-LRC 评估");
+        AssertTrue(
+            !EmergencyEventsCommandGuard.IsAllowed(
+                EmergencyEventsCommandKind.CrisisCheck,
+                PluginRuntimeState.DISABLED),
+            "DISABLED 时不得运行真实危机检查");
+        AssertTrue(
+            EmergencyEventsCommandGuard.IsAllowed(
+                EmergencyEventsCommandKind.TestCrisisEndSimulate,
+                PluginRuntimeState.DISABLED),
+            "纯 Dry Run 测试可在 DISABLED 时运行");
+    }
+
     private static void EmergencyEventsCommandSyntaxRecognizesCommandTree()
     {
         (string[] Arguments, EmergencyEventsCommandKind Expected)[] supported =
@@ -602,6 +640,229 @@ internal static class Program
         AssertTrue(
             !EmergencyEventsCommandSyntax.TryParse(new[] { "crisis", "force", "bio" }, out _),
             "第一版不得接受直接伪造真实危机");
+    }
+
+    private static void EmergencyEventsCommandSyntaxRecognizesWaveIdAndStageModes()
+    {
+        AssertTrue(
+            EmergencyEventsCommandSyntax.TryParse(
+                new[] { "wave", "history", "1-MW-001", "detail" },
+                out EmergencyEventsCommandRequest waveDetail),
+            "WaveId 详情查询必须接受实际格式的字符串标识");
+        AssertEqual(
+            EmergencyEventsCommandKind.WaveHistoryDetail,
+            waveDetail.Kind,
+            "WaveId 详情查询必须归类为 WaveHistoryDetail");
+        AssertEqual("1-mw-001", waveDetail.Target, "WaveId 必须被保留为请求目标");
+
+        (string[] Arguments, string ExpectedKind)[] stageCommands =
+        {
+            (new[] { "dlrc", "stage" }, "DlrcStage"),
+            (new[] { "dlrc", "stage", "full" }, "DlrcStageFull"),
+            (new[] { "dlrc", "stage", "raw" }, "DlrcStageRaw"),
+            (new[] { "help", "dlrc" }, "Help"),
+        };
+
+        foreach ((string[] arguments, string expectedKind) in stageCommands)
+        {
+            AssertTrue(
+                EmergencyEventsCommandSyntax.TryParse(arguments, out EmergencyEventsCommandRequest request),
+                $"命令 {string.Join(" ", arguments)} 必须被识别");
+            AssertEqual(expectedKind, request.Kind.ToString(), $"命令 {string.Join(" ", arguments)} 的类型错误");
+        }
+    }
+
+    private static void CrisisDiagnosticsAreReadOnly()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(
+            populationTier: PopulationTier.C,
+            scp0492Count: 7);
+        DlrcEvaluationResult result = CreateResult(snapshot);
+        CrisisManager manager = new CrisisManager();
+
+        AssertTrue(
+            manager.TryDiagnose(CrisisTag.BIO, snapshot, result, out CrisisDetectionResult? detection),
+            "BIO 手动诊断必须调用正式 Detector");
+        AssertTrue(detection is not null, "BIO 手动诊断必须返回检测结果");
+        AssertEqual(CrisisSeverity.Level4, detection!.Severity, "BIO 手动诊断必须保留正式阈值判定");
+        AssertTrue(manager.CurrentCrisisAssessment is null, "手动诊断不得写入真实 CrisisAssessment");
+
+        AssertTrue(
+            !manager.TryDiagnose(CrisisTag.WAR, snapshot, result, out CrisisDetectionResult? war),
+            "尚未实现的 WAR 必须明确报告不可诊断");
+        AssertTrue(war is null, "尚未实现的 WAR 不得伪造检测结果");
+    }
+
+    private static void CrisisDiagnosticSnapshotFactoryPreservesSource()
+    {
+        RoundSnapshot source = CreateSnapshot(
+            scp0492Count: 4,
+            scp079Present: true,
+            scp079Tier: 2,
+            foundationCombatants: 8,
+            chaosCombatants: 3,
+            warheadUnlocked: false,
+            warheadActive: false,
+            warheadDetonated: false);
+
+        RoundSnapshot zombieSimulation = CrisisDiagnosticSnapshotFactory.WithZombieCount(source, 10);
+        RoundSnapshot sysSimulation = CrisisDiagnosticSnapshotFactory.WithScp079Tier(source, 5);
+        RoundSnapshot securitySimulation = CrisisDiagnosticSnapshotFactory.WithSecurityFacts(source, 1, true);
+        RoundSnapshot warSimulation = CrisisDiagnosticSnapshotFactory.WithWarheadState(source, "detonated");
+
+        AssertEqual(4, source.Scp0492Count, "Dry Run 不得改写真实僵尸数量");
+        AssertEqual(2, source.Scp079Tier, "Dry Run 不得改写真实 079 等级");
+        AssertEqual(8, source.FoundationCombatants, "Dry Run 不得改写真实基金会人数");
+        AssertTrue(!source.WarheadDetonated, "Dry Run 不得改写真实核弹状态");
+        AssertEqual(10, zombieSimulation.Scp0492Count, "BIO Dry Run 必须仅覆盖僵尸数量");
+        AssertEqual(5, sysSimulation.Scp079Tier, "SYS Dry Run 必须仅覆盖 079 等级");
+        AssertEqual(1, securitySimulation.FoundationCombatants, "SEC Dry Run 必须覆盖基金会人数");
+        AssertEqual(3, securitySimulation.ChaosCombatants, "SEC Dry Run 必须保留原有敌对人数");
+        AssertTrue(warSimulation.WarheadDetonated, "WAR Dry Run 必须构造目标核弹事实");
+    }
+
+    private static void DlrcStageReportUsesChineseFields()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(
+            populationTier: PopulationTier.C,
+            roundStartPopulation: 33,
+            currentOnlinePlayers: 30,
+            foundationCombatants: 11,
+            chaosCombatants: 4,
+            mainScpAlive: 2,
+            startingScpCount: 3,
+            scp0492Count: 5,
+            scp079Present: true,
+            scp079Tier: 4,
+            warheadDetonated: false);
+        DlrcEvaluationResult result = CreateResult(snapshot);
+        CrisisAssessment assessment = new CrisisAssessment(
+            11,
+            DlrcEvaluationTrigger.MANUAL_RA,
+            snapshot,
+            result,
+            new[]
+            {
+                new CrisisDetectionResult(CrisisTag.BIO, true, CrisisSeverity.Level4, "ZombieCount >= L4Threshold"),
+            });
+
+        string report = DlrcStageReportFormatter.FormatStandard(snapshot, result, assessment);
+        string[] requiredTokens =
+        {
+            "【D-LRC 当前战局快照】",
+            "人口编制：C",
+            "基金会战斗人员：11",
+            "核弹已爆炸：否",
+            "生化危机（BIO）：4级",
+        };
+        foreach (string token in requiredTokens)
+        {
+            AssertTrue(report.Contains(token, StringComparison.Ordinal), $"标准战局报告缺少 {token}");
+        }
+
+        string[] forbiddenTokens = { "FoundationCombatants", "EligibleSpectators", "True", "False", "null" };
+        foreach (string token in forbiddenTokens)
+        {
+            AssertTrue(!report.Contains(token, StringComparison.Ordinal), $"标准战局报告不得泄漏 {token}");
+        }
+    }
+
+    private static void DlrcDisplayCodeRequiresSynchronizedAssessment()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(populationTier: PopulationTier.B, scp0492Count: 4);
+        DlrcEvaluationResult result = CreateResult(snapshot);
+        CrisisAssessment matching = new CrisisAssessment(
+            19,
+            DlrcEvaluationTrigger.MANUAL_RA,
+            snapshot,
+            result,
+            new[] { new CrisisDetectionResult(CrisisTag.BIO, true, CrisisSeverity.Level3, "Active") });
+        CrisisAssessment stale = new CrisisAssessment(
+            18,
+            DlrcEvaluationTrigger.PERIODIC,
+            snapshot,
+            result,
+            Array.Empty<CrisisDetectionResult>());
+
+        AssertTrue(
+            DlrcDisplayCodeFormatter.TryFormat(result, 19, matching, out string code, out _),
+            "同一次评估的 CrisisAssessment 必须能生成完整代码");
+        AssertEqual($"{result.Code}-BIO", code, "完整代码必须使用正式危机标签");
+        AssertTrue(
+            !DlrcDisplayCodeFormatter.TryFormat(result, 19, stale, out _, out string reason),
+            "不同评估编号的 CrisisAssessment 不得被拼接到当前结果");
+        AssertTrue(reason.Contains("不同步", StringComparison.Ordinal), "不同步结果必须明确提示，而非伪造无危机");
+    }
+
+    private static void ContainmentDiagnosticCommitIsExplicit()
+    {
+        DateTime secondWaveAt = new DateTime(2026, 8, 24, 17, 0, 0, DateTimeKind.Utc);
+        MajorWaveSnapshot[] waves =
+        {
+            CreateWave(6, 6, false, 0d, secondWaveAt.AddMinutes(-5)),
+            CreateWave(6, 6, false, 0d, secondWaveAt),
+        };
+        RoundSnapshot baseline = CreateSnapshot(
+            timestamp: secondWaveAt,
+            mainScpAlive: 3,
+            scp0492Count: 4,
+            majorWaveHistory: waves);
+        DlrcEvaluationResult baselineResult = CreateResult(baseline);
+        CrisisManager manager = new CrisisManager();
+        manager.Evaluate(new DlrcEvaluationCompletedEvent(1, DlrcEvaluationTrigger.PERIODIC, baseline, baselineResult));
+
+        RoundSnapshot checkpoint = CreateSnapshot(
+            timestamp: secondWaveAt.AddMinutes(1),
+            mainScpAlive: 3,
+            scp0492Count: 4,
+            majorWaveHistory: waves);
+        DlrcEvaluationResult checkpointResult = CreateResult(checkpoint);
+        AssertTrue(
+            manager.TryRunContainmentCheckpoint(checkpoint, checkpointResult, commit: false, out CrisisDetectionResult? dryRun),
+            "CON Dry Run 必须在已有正式基线时执行");
+        AssertEqual(CrisisSeverity.Level3, dryRun!.Severity, "CON Dry Run 必须按正式 Detector 预测失败结果");
+
+        AssertTrue(
+            manager.TryDiagnose(CrisisTag.CON, checkpoint, checkpointResult, out CrisisDetectionResult? afterDryRun),
+            "CON 诊断必须可查询");
+        AssertEqual(CrisisSeverity.Inactive, afterDryRun!.Severity, "CON Dry Run 不得推进真实 FailureStreak");
+
+        AssertTrue(
+            manager.TryRunContainmentCheckpoint(checkpoint, checkpointResult, commit: true, out CrisisDetectionResult? committed),
+            "CON commit 必须在已有正式基线时执行");
+        AssertEqual(CrisisSeverity.Level3, committed!.Severity, "CON commit 必须推进一次正式失败状态");
+        AssertTrue(
+            manager.TryDiagnose(CrisisTag.CON, checkpoint, checkpointResult, out CrisisDetectionResult? afterCommit),
+            "CON commit 后仍必须可诊断");
+        AssertEqual(CrisisSeverity.Level3, afterCommit!.Severity, "CON commit 后正式 FailureStreak 必须保留");
+    }
+
+    private static void EndDiagnosticSimulationUsesIsolatedState()
+    {
+        RoundSnapshot source = CreateSnapshot(
+            timestamp: new DateTime(2026, 8, 24, 18, 0, 0, DateTimeKind.Utc),
+            warheadDetonated: false,
+            surfaceFoundationCombatants: 0,
+            surfaceChaosCombatants: 0);
+        DlrcEvaluationResult sourceResult = CreateResult(source);
+        CrisisManager manager = new CrisisManager();
+        RoundSnapshot simulated = CrisisDiagnosticSnapshotFactory.WithEndStalemate(source);
+        DlrcEvaluationResult simulatedResult = CreateResult(simulated);
+
+        AssertTrue(
+            manager.TryDiagnoseEndSimulation(simulated, simulatedResult, 480, out CrisisDetectionResult? detection),
+            "END 快速模拟必须使用正式 END Detector");
+        AssertEqual(CrisisSeverity.Level4, detection!.Severity, "480 秒地表僵持必须为 END L4");
+        AssertTrue(!source.WarheadDetonated, "END 模拟不得改写真实核弹事实");
+        AssertEqual(0, source.SurfaceFoundationCombatants, "END 模拟不得改写真实地表人数");
+    }
+
+    private static void EmergencyEventsCommandSyntaxRecognizesRoundStateAlias()
+    {
+        AssertTrue(
+            EmergencyEventsCommandSyntax.TryParse(new[] { "round", "state" }, out EmergencyEventsCommandRequest request),
+            "round state 必须被识别为回合状态查询");
+        AssertEqual(EmergencyEventsCommandKind.Round, request.Kind, "round state 必须与 round 使用同一查询处理器");
     }
 
     private static CrisisDetectionResult Detect(ICrisisDetector detector, RoundSnapshot snapshot, CrisisState state)

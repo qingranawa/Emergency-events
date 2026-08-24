@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using EmergencyEvents.Crisis;
 using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RoundCore;
 using Exiled.API.Features;
@@ -17,6 +18,7 @@ public sealed class DlrcEvaluatorService
     private readonly SnapshotCollector snapshotCollector = new SnapshotCollector();
     private readonly BattlefieldMomentumTracker momentumTracker = new BattlefieldMomentumTracker();
     private readonly HashSet<long> warheadCancellationEventKeys = new HashSet<long>();
+    private readonly Queue<MajorWaveCompletedEvent> queuedPostMajorWaveEvents = new Queue<MajorWaveCompletedEvent>();
 
     private EvaluationHistory evaluationHistory = new EvaluationHistory();
     private EvaluationOptions options = EvaluationOptions.Default;
@@ -27,9 +29,11 @@ public sealed class DlrcEvaluatorService
     private CoroutineHandle scheduledHandle;
     private bool hasScheduledHandle;
     private bool isEvaluating;
+    private bool queuedManualEvaluation;
     private bool isActive;
     private long roundId;
     private int warheadCancellationCount;
+    private long evaluationId;
 
     public DlrcEvaluatorService(Config config)
     {
@@ -41,6 +45,21 @@ public sealed class DlrcEvaluatorService
     public RoundSnapshot? LastSnapshot => lastSnapshot;
 
     public EvaluationHistory History => evaluationHistory;
+
+    public bool IsActive => IsActiveRound();
+
+    public bool IsEvaluating => isEvaluating;
+
+    public bool HasScheduledEvaluation => hasScheduledHandle;
+
+    public bool HasQueuedManualEvaluation => queuedManualEvaluation;
+
+    public DlrcEvaluationTrigger? LastTrigger { get; private set; }
+
+    /// <summary>
+    /// 每次成功完成 D-LRC 评估后发布一次，供 Module 04 使用。
+    /// </summary>
+    public event Action<DlrcEvaluationCompletedEvent>? EvaluationCompleted;
 
     public void StartRound(
         RoundCoreState? currentRoundCoreState,
@@ -66,10 +85,14 @@ public sealed class DlrcEvaluatorService
         evaluationHistory = new EvaluationHistory(options.HistoryCapacity);
         momentumTracker.Clear();
         warheadCancellationEventKeys.Clear();
+        queuedPostMajorWaveEvents.Clear();
         warheadCancellationCount = 0;
+        evaluationId = 0L;
         lastResult = null;
         lastSnapshot = null;
+        LastTrigger = null;
         isEvaluating = false;
+        queuedManualEvaluation = false;
         isActive = true;
 
         double delaySeconds = EvaluationSchedule.GetInitialDelaySeconds(
@@ -123,6 +146,101 @@ public sealed class DlrcEvaluatorService
             $"Count={warheadCancellationCount}; EventKey={eventKey}; ScorePerCancellation={options.WarheadCancelScore:0.####}; MaxScore={options.WarheadCancelMaxScore:0.####}");
     }
 
+    /// <summary>
+    /// 立即执行一次管理员请求的评估，不修改原有周期调度。
+    /// </summary>
+    public bool TryEvaluateImmediately(out DlrcEvaluationResult? result, out string response)
+    {
+        result = null;
+        if (!IsActiveRound())
+        {
+            response = "当前没有正在进行、可评估的回合。";
+            return false;
+        }
+
+        if (isEvaluating)
+        {
+            if (queuedManualEvaluation)
+            {
+                response = "D-LRC 当前正在评估，已有一个管理员补算请求排队。";
+                return true;
+            }
+
+            queuedManualEvaluation = true;
+            LogInfo(roundId, "MANUAL_RA_QUEUED", "RequestedBy=RA; Queued=true; PeriodicSchedule=Unchanged");
+            response = "D-LRC 当前正在评估，已排队一次管理员补算。";
+            return true;
+        }
+
+        isEvaluating = true;
+        try
+        {
+            EvaluateOnce(DlrcEvaluationTrigger.MANUAL_RA);
+            result = lastResult;
+            if (result is null || !result.IsValid)
+            {
+                response = "D-LRC 未生成有效评估结果。";
+                return false;
+            }
+
+            LogInfo(roundId, "MANUAL_RA_EVALUATED", $"RequestedBy=RA; Queued=false; Code={result.Code}; PeriodicSchedule=Unchanged");
+            response = $"D-LRC 已立即评估：{result.Code}。原有周期计时未修改。";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            LogError(roundId, "MANUAL_EVALUATION_FAILED", exception);
+            response = "D-LRC 立即评估失败，请查看服务端日志。";
+            return false;
+        }
+        finally
+        {
+            isEvaluating = false;
+            ProcessQueuedManualEvaluation(roundId);
+        }
+    }
+
+    /// <summary>
+    /// 主波实际生成后立即重算，原有 30 秒定时调度不重置。
+    /// </summary>
+    public void HandleMajorWaveCompleted(MajorWaveCompletedEvent ev)
+    {
+        if (!IsActiveRound() || ev is null || ev.RoundId != roundId)
+        {
+            return;
+        }
+
+        if (isEvaluating)
+        {
+            if (PostMajorWaveQueuePolicy.ShouldQueue(queuedPostMajorWaveEvents.Count))
+            {
+                queuedPostMajorWaveEvents.Enqueue(ev);
+                LogInfo(roundId, "POST_MAJOR_WAVE_QUEUED", $"WaveId={ev.WaveId}; Reason=EvaluationInProgress; QueueLength=1; PeriodicSchedule=Unchanged");
+            }
+            else
+            {
+                LogDebug(roundId, "POST_MAJOR_WAVE_COALESCED", $"WaveId={ev.WaveId}; Reason=EvaluationInProgress; QueueLength=1; PeriodicSchedule=Unchanged");
+            }
+
+            return;
+        }
+
+        isEvaluating = true;
+        try
+        {
+            EvaluateOnce(DlrcEvaluationTrigger.POST_MAJOR_WAVE);
+            LogInfo(roundId, "POST_MAJOR_WAVE_EVALUATED", $"WaveId={ev.WaveId}; PeriodicSchedule=Unchanged");
+        }
+        catch (Exception exception)
+        {
+            LogError(roundId, "POST_MAJOR_WAVE_FAILED", exception);
+        }
+        finally
+        {
+            isEvaluating = false;
+        }
+    }
+
     public void ResetForWaitingForPlayers()
     {
         CleanupRound("WaitingForPlayers");
@@ -135,7 +253,8 @@ public sealed class DlrcEvaluatorService
             || lastResult is not null
             || lastSnapshot is not null
             || evaluationHistory.Count > 0
-            || warheadCancellationEventKeys.Count > 0;
+            || warheadCancellationEventKeys.Count > 0
+            || queuedPostMajorWaveEvents.Count > 0;
         long cleanupRoundId = roundId;
         bool handleCleanupSucceeded = StopScheduledEvaluation();
 
@@ -144,7 +263,10 @@ public sealed class DlrcEvaluatorService
         evaluationHistory.Clear();
         momentumTracker.Clear();
         warheadCancellationEventKeys.Clear();
+        queuedPostMajorWaveEvents.Clear();
+        queuedManualEvaluation = false;
         warheadCancellationCount = 0;
+        evaluationId = 0L;
         lastSnapshot = null;
         lastResult = null;
         roundCoreState = null;
@@ -156,8 +278,26 @@ public sealed class DlrcEvaluatorService
             LogInfo(
                 cleanupRoundId,
                 "Cleanup",
-                $"Reason={reason}; EvaluationHistoryCleared=true; MomentumCleared=true; SnapshotCleared=true; LastResultCleared=true; WarheadDedupCleared=true; ScheduledHandleCleanup={handleCleanupSucceeded}; Cleanup={(handleCleanupSucceeded ? "SUCCESS" : "PARTIAL")}");
+                $"Reason={reason}; EvaluationHistoryCleared=true; MomentumCleared=true; SnapshotCleared=true; LastResultCleared=true; WarheadDedupCleared=true; PostMajorWaveQueueCleared=true; ScheduledHandleCleanup={handleCleanupSucceeded}; Cleanup={(handleCleanupSucceeded ? "SUCCESS" : "PARTIAL")}");
         }
+    }
+
+    public void SuspendRound(string reason)
+    {
+        if (!isActive && !hasScheduledHandle)
+        {
+            return;
+        }
+
+        bool scheduledHandleStopped = StopScheduledEvaluation();
+        isActive = false;
+        isEvaluating = false;
+        queuedManualEvaluation = false;
+        queuedPostMajorWaveEvents.Clear();
+        LogInfo(
+            roundId,
+            "Suspended",
+            $"Reason={reason}; ScheduledHandleStopped={scheduledHandleStopped}; LastResultRetained={lastResult is not null}; HistoryRetained={evaluationHistory.Count}");
     }
 
     private void ScheduleEvaluation(long currentRoundId, double delaySeconds)
@@ -202,7 +342,7 @@ public sealed class DlrcEvaluatorService
         isEvaluating = true;
         try
         {
-            EvaluateOnce();
+            EvaluateOnce(DlrcEvaluationTrigger.PERIODIC);
         }
         catch (Exception exception)
         {
@@ -212,6 +352,54 @@ public sealed class DlrcEvaluatorService
         {
             isEvaluating = false;
             ScheduleNextEvaluation(currentRoundId);
+            ProcessQueuedPostMajorWaveEvents(currentRoundId);
+            ProcessQueuedManualEvaluation(currentRoundId);
+        }
+    }
+
+    private void ProcessQueuedPostMajorWaveEvents(long currentRoundId)
+    {
+        while (IsActiveRound(currentRoundId) && queuedPostMajorWaveEvents.Count > 0)
+        {
+            MajorWaveCompletedEvent completedEvent = queuedPostMajorWaveEvents.Dequeue();
+            isEvaluating = true;
+            try
+            {
+                EvaluateOnce(DlrcEvaluationTrigger.POST_MAJOR_WAVE);
+                LogInfo(roundId, "POST_MAJOR_WAVE_EVALUATED", $"WaveId={completedEvent.WaveId}; Source=Queued; PeriodicSchedule=Unchanged");
+            }
+            catch (Exception exception)
+            {
+                LogError(roundId, "POST_MAJOR_WAVE_FAILED", exception);
+            }
+            finally
+            {
+                isEvaluating = false;
+            }
+        }
+    }
+
+    private void ProcessQueuedManualEvaluation(long currentRoundId)
+    {
+        if (!IsActiveRound(currentRoundId) || !queuedManualEvaluation || isEvaluating)
+        {
+            return;
+        }
+
+        queuedManualEvaluation = false;
+        isEvaluating = true;
+        try
+        {
+            EvaluateOnce(DlrcEvaluationTrigger.MANUAL_RA);
+            LogInfo(roundId, "MANUAL_RA_EVALUATED", "RequestedBy=RA; Queued=true; PeriodicSchedule=Unchanged");
+        }
+        catch (Exception exception)
+        {
+            LogError(roundId, "MANUAL_RA_EVALUATION_FAILED", exception);
+        }
+        finally
+        {
+            isEvaluating = false;
         }
     }
 
@@ -227,7 +415,7 @@ public sealed class DlrcEvaluatorService
         }
     }
 
-    private void EvaluateOnce()
+    private void EvaluateOnce(DlrcEvaluationTrigger trigger)
     {
         DateTime timestamp = DateTime.UtcNow;
         TimeSpan elapsed = Round.ElapsedTime;
@@ -250,6 +438,7 @@ public sealed class DlrcEvaluatorService
         lastSnapshot = snapshot;
         evaluationHistory.Add(result);
         lastResult = result;
+        LastTrigger = trigger;
         LogDebug(roundId, "EvaluationDetail", EvaluationLogFormatter.FormatSnapshot(snapshot));
         LogDebug(roundId, "EvaluationDetail", EvaluationLogFormatter.FormatDetailed(result, roundId));
         if (previous is null
@@ -257,6 +446,34 @@ public sealed class DlrcEvaluatorService
             || previous.ControlState != result.ControlState)
         {
             LogInfo(roundId, "EvaluationChanged", EvaluationLogFormatter.FormatChange(previous, result));
+        }
+
+        PublishCompletedEvaluation(trigger, snapshot, result);
+    }
+
+    private void PublishCompletedEvaluation(
+        DlrcEvaluationTrigger trigger,
+        RoundSnapshot snapshot,
+        DlrcEvaluationResult result)
+    {
+        if (!result.IsValid)
+        {
+            LogWarn(roundId, "CrisisEvaluationSkipped", "Reason=UpstreamEvaluationInvalid");
+            return;
+        }
+
+        evaluationId++;
+        try
+        {
+            EvaluationCompleted?.Invoke(new DlrcEvaluationCompletedEvent(
+                evaluationId,
+                trigger,
+                snapshot,
+                result));
+        }
+        catch (Exception exception)
+        {
+            LogError(roundId, "CrisisEvaluationPublishFailed", exception);
         }
     }
 

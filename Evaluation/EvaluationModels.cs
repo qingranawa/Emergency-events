@@ -66,7 +66,8 @@ public sealed class MajorWaveSnapshot
         bool isCatastrophic,
         DateTime startedAt,
         DateTime? evaluatedAt = null,
-        IEnumerable<int>? memberIds = null)
+        IEnumerable<int>? memberIds = null,
+        DateTime? completedAt = null)
     {
         Name = EvaluationValueNormalizer.NormalizeName(name);
         StartingCount = EvaluationValueNormalizer.NormalizeNonNegativeInt(startingCount);
@@ -75,6 +76,7 @@ public sealed class MajorWaveSnapshot
         BaseFailureScore = EvaluationValueNormalizer.NormalizeScore(baseFailureScore, 20d);
         IsCatastrophic = isCatastrophic;
         StartedAt = startedAt;
+        CompletedAt = completedAt ?? startedAt;
         EvaluatedAt = evaluatedAt;
         MemberIds = EvaluationValueNormalizer.ClonePlayerIds(memberIds);
     }
@@ -100,6 +102,8 @@ public sealed class MajorWaveSnapshot
     public DateTime StartedAt { get; }
 
     public DateTime StartTime => StartedAt;
+
+    public DateTime CompletedAt { get; }
 
     public DateTime? EvaluatedAt { get; }
 
@@ -141,7 +145,14 @@ public sealed class RoundSnapshot
         int recentFoundationDeaths120s = 0,
         int recentHostileDeaths120s = 0,
         int recentMainScpDeaths120s = 0,
-        IEnumerable<int>? activePlayerIds = null)
+        IEnumerable<int>? activePlayerIds = null,
+        bool hostileThirdPartyActive = false,
+        int hostileThirdPartyCombatants = 0,
+        int surfaceFoundationCombatants = 0,
+        int surfaceChaosCombatants = 0,
+        int surfaceMainScp = 0,
+        int surfaceOtherHostiles = 0,
+        bool scp079TierIsValid = true)
     {
         RoundId = EvaluationValueNormalizer.NormalizeRoundId(roundId);
         Timestamp = timestamp;
@@ -161,6 +172,10 @@ public sealed class RoundSnapshot
         ScpStates = EvaluationValueNormalizer.CloneReadOnlyList(scpStates);
         Scp0492Count = EvaluationValueNormalizer.NormalizeNonNegativeInt(scp0492Count);
         Scp079Present = scp079Present;
+        Scp079TierIsValid = scp079Present
+            && scp079TierIsValid
+            && scp079Tier >= 0
+            && scp079Tier <= 5;
         Scp079Tier = scp079Present
             ? EvaluationValueNormalizer.ClampInt(scp079Tier, 0, 5)
             : 0;
@@ -173,6 +188,12 @@ public sealed class RoundSnapshot
         RecentHostileDeaths120s = EvaluationValueNormalizer.NormalizeNonNegativeInt(recentHostileDeaths120s);
         RecentMainScpDeaths120s = EvaluationValueNormalizer.NormalizeNonNegativeInt(recentMainScpDeaths120s);
         ActivePlayerIds = EvaluationValueNormalizer.ClonePlayerIds(activePlayerIds);
+        HostileThirdPartyActive = hostileThirdPartyActive;
+        HostileThirdPartyCombatants = EvaluationValueNormalizer.NormalizeNonNegativeInt(hostileThirdPartyCombatants);
+        SurfaceFoundationCombatants = EvaluationValueNormalizer.NormalizeNonNegativeInt(surfaceFoundationCombatants);
+        SurfaceChaosCombatants = EvaluationValueNormalizer.NormalizeNonNegativeInt(surfaceChaosCombatants);
+        SurfaceMainScp = EvaluationValueNormalizer.NormalizeNonNegativeInt(surfaceMainScp);
+        SurfaceOtherHostiles = EvaluationValueNormalizer.NormalizeNonNegativeInt(surfaceOtherHostiles);
     }
 
     public long RoundId { get; }
@@ -213,6 +234,8 @@ public sealed class RoundSnapshot
 
     public int Scp079Tier { get; }
 
+    public bool Scp079TierIsValid { get; }
+
     public bool WarheadUnlocked { get; }
 
     public bool WarheadActive { get; }
@@ -232,6 +255,18 @@ public sealed class RoundSnapshot
     public IReadOnlyList<int> ActivePlayerIds { get; }
 
     public IReadOnlyList<int> OnlineActivePlayerIds => ActivePlayerIds;
+
+    public bool HostileThirdPartyActive { get; }
+
+    public int HostileThirdPartyCombatants { get; }
+
+    public int SurfaceFoundationCombatants { get; }
+
+    public int SurfaceChaosCombatants { get; }
+
+    public int SurfaceMainScp { get; }
+
+    public int SurfaceOtherHostiles { get; }
 }
 
 internal static class EvaluationValueNormalizer

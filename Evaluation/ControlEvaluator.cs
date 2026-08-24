@@ -176,12 +176,13 @@ public static class ControlEvaluator
             return WavePerformance.CATASTROPHIC;
         }
 
-        if (latest.BaseFailureScore <= 4d)
+        double baseFailure = CalculateBaseFailure(latest);
+        if (baseFailure <= 4d)
         {
             return WavePerformance.GOOD;
         }
 
-        if (latest.BaseFailureScore >= 12d)
+        if (baseFailure >= 12d)
         {
             return WavePerformance.POOR;
         }
@@ -200,6 +201,32 @@ public static class ControlEvaluator
     private static bool IsCatastrophic(MajorWaveSnapshot wave)
     {
         return wave.IsCatastrophic || wave.SurvivingCountAtEvaluation == 0;
+    }
+
+    private static double CalculateBaseFailure(MajorWaveSnapshot wave)
+    {
+        if (wave.StartingCount <= 0)
+        {
+            return 0d;
+        }
+
+        double survivalRatio = wave.SurvivingCountAtEvaluation / (double)wave.StartingCount;
+        if (survivalRatio > 0.75d)
+        {
+            return 0d;
+        }
+
+        if (survivalRatio > 0.50d)
+        {
+            return 4d;
+        }
+
+        if (survivalRatio > 0.25d)
+        {
+            return 8d;
+        }
+
+        return survivalRatio > 0d ? 12d : 15d;
     }
 
     private static DateTime GetWaveTime(MajorWaveSnapshot wave)

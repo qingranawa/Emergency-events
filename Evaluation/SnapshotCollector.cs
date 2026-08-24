@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RoundCore;
+using Exiled.API.Enums;
 using Exiled.API.Features;
 using Exiled.API.Features.Roles;
 using PlayerRoles;
@@ -37,6 +38,11 @@ public sealed class SnapshotCollector
         int scp0492Count = 0;
         bool scp079Present = false;
         int scp079Tier = 0;
+        bool scp079TierIsValid = true;
+        int surfaceFoundationCombatants = 0;
+        int surfaceChaosCombatants = 0;
+        int surfaceMainScp = 0;
+        int surfaceOtherHostiles = 0;
 
         foreach (Player player in players)
         {
@@ -50,6 +56,7 @@ public sealed class SnapshotCollector
             bool isOverwatch = role == RoleTypeId.Overwatch || player.IsOverwatchEnabled;
             bool isSpectator = role == RoleTypeId.Spectator;
             bool isAlive = player.IsAlive;
+            bool isSurface = player.Zone == ZoneType.Surface;
 
             if (isOverwatch)
             {
@@ -69,10 +76,18 @@ public sealed class SnapshotCollector
             if (IsFoundationRole(role))
             {
                 foundationCombatants++;
+                if (isSurface)
+                {
+                    surfaceFoundationCombatants++;
+                }
             }
             else if (IsHostileRole(role))
             {
                 chaosCombatants++;
+                if (isSurface)
+                {
+                    surfaceChaosCombatants++;
+                }
             }
             else if (role == RoleTypeId.ClassD)
             {
@@ -89,6 +104,10 @@ public sealed class SnapshotCollector
             if (role == RoleTypeId.Scp0492)
             {
                 scp0492Count++;
+                if (isSurface)
+                {
+                    surfaceOtherHostiles++;
+                }
                 continue;
             }
 
@@ -96,7 +115,13 @@ public sealed class SnapshotCollector
             {
                 mainScpAlive++;
                 scp079Present = true;
-                scp079Tier = Math.Max(scp079Tier, ReadScp079Tier(player));
+                Scp079TierRead tierRead = ReadScp079Tier(player);
+                scp079Tier = Math.Max(scp079Tier, tierRead.Value);
+                scp079TierIsValid &= tierRead.IsValid;
+                if (isSurface)
+                {
+                    surfaceMainScp++;
+                }
                 scpStates.Add(new ScpSnapshot(
                     roleName,
                     isAlive: true,
@@ -108,6 +133,10 @@ public sealed class SnapshotCollector
             if (IsMainScpRole(roleName))
             {
                 mainScpAlive++;
+                if (isSurface)
+                {
+                    surfaceMainScp++;
+                }
                 scpStates.Add(ReadMainScpSnapshot(player, roleName));
                 continue;
             }
@@ -115,6 +144,10 @@ public sealed class SnapshotCollector
             if (!IsFoundationRole(role) && !IsHostileRole(role))
             {
                 otherHostileCombatants++;
+                if (isSurface)
+                {
+                    surfaceOtherHostiles++;
+                }
             }
         }
 
@@ -154,7 +187,14 @@ public sealed class SnapshotCollector
             actualMomentum.FoundationDeaths,
             actualMomentum.HostileHumanDeaths,
             actualMomentum.MainScpDeaths,
-            activePlayerIds);
+            activePlayerIds,
+            hostileThirdPartyActive: false,
+            hostileThirdPartyCombatants: 0,
+            surfaceFoundationCombatants: surfaceFoundationCombatants,
+            surfaceChaosCombatants: surfaceChaosCombatants,
+            surfaceMainScp: surfaceMainScp,
+            surfaceOtherHostiles: surfaceOtherHostiles,
+            scp079TierIsValid: scp079TierIsValid);
     }
 
     private static ScpSnapshot ReadMainScpSnapshot(Player player, string roleName)
@@ -196,13 +236,20 @@ public sealed class SnapshotCollector
         }
     }
 
-    private static int ReadScp079Tier(Player player)
+    private static Scp079TierRead ReadScp079Tier(Player player)
     {
         try
         {
             if (player.Role is Scp079Role scp079Role)
             {
-                return Math.Min(5, Math.Max(0, Convert.ToInt32(scp079Role.Level)));
+                int value = Convert.ToInt32(scp079Role.Level);
+                if (value < 0 || value > 5)
+                {
+                    Log.Warn($"[EmergencyEvents][DLRC][{DateTime.UtcNow:O}][Scp079LevelUnavailable] Reason=OutOfRange; Value={value}");
+                    return new Scp079TierRead(value, false);
+                }
+
+                return new Scp079TierRead(value, true);
             }
         }
         catch (Exception exception)
@@ -210,7 +257,7 @@ public sealed class SnapshotCollector
             Log.Warn($"[EmergencyEvents][DLRC][{DateTime.UtcNow:O}][Scp079LevelUnavailable] Reason={exception.GetType().Name}");
         }
 
-        return 0;
+        return new Scp079TierRead(0, false);
     }
 
     private static bool IsFoundationRole(RoleTypeId role)
@@ -240,5 +287,18 @@ public sealed class SnapshotCollector
     private static bool IsValidHealthValue(double value)
     {
         return !double.IsNaN(value) && !double.IsInfinity(value) && value >= 0d;
+    }
+
+    private readonly struct Scp079TierRead
+    {
+        public Scp079TierRead(int value, bool isValid)
+        {
+            Value = value;
+            IsValid = isValid;
+        }
+
+        public int Value { get; }
+
+        public bool IsValid { get; }
     }
 }

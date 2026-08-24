@@ -1,13 +1,12 @@
 using System;
+using EmergencyEvents.Crisis;
 using Exiled.API.Features;
 using Exiled.Events.EventArgs.Player;
-using Exiled.Events.EventArgs.Scp914;
 using Exiled.Events.EventArgs.Server;
 using EmergencyEvents.Evaluation;
 using PlayerEvents = Exiled.Events.Handlers.Player;
 using ServerEvents = Exiled.Events.Handlers.Server;
 using WarheadEvents = Exiled.Events.Handlers.Warhead;
-using Scp914Events = Exiled.Events.Handlers.Scp914;
 using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RoundCore;
 
@@ -21,6 +20,7 @@ public sealed class Plugin : Plugin<Config>
     private RoundCoreManager? roundCoreManager;
     private ReinforcementManager? reinforcementManager;
     private DlrcEvaluatorService? dlrcEvaluatorService;
+    private CrisisManager? crisisManager;
 
     public override string Name => "EmergencyEvents";
 
@@ -31,15 +31,68 @@ public sealed class Plugin : Plugin<Config>
     public override Version RequiredExiledVersion => new Version(9, 14, 2);
 
     /// <summary>
+    /// 当前已启用的插件实例，供 Remote Admin 命令转发请求。
+    /// </summary>
+    public static Plugin? Instance { get; private set; }
+
+    /// <summary>
     /// 对后续模块提供当前回合最后一份有效 D-LRC 结果。
     /// </summary>
     public DlrcEvaluationResult? CurrentDlrcResult => dlrcEvaluatorService?.LastResult;
 
+    /// <summary>
+    /// 对后续 Module 05 提供当前回合最后一份有效危机评估。
+    /// </summary>
+    public CrisisAssessment? CurrentCrisisAssessment => crisisManager?.CurrentCrisisAssessment;
+
+    /// <summary>
+    /// 由 Remote Admin 请求一次立即 D-LRC 评估，不干预周期调度。
+    /// </summary>
+    public bool TryEvaluateDlrcImmediately(out DlrcEvaluationResult? result, out string response)
+    {
+        if (dlrcEvaluatorService is null)
+        {
+            result = null;
+            response = "D-LRC 服务尚未启用。";
+            return false;
+        }
+
+        return dlrcEvaluatorService.TryEvaluateImmediately(out result, out response);
+    }
+
+    /// <summary>
+    /// 返回最近一次 D-LRC 评估的只读状态报告，不触发重新评估。
+    /// </summary>
+    public bool TryGetDlrcState(out string response)
+    {
+        if (dlrcEvaluatorService?.LastSnapshot is not RoundSnapshot snapshot
+            || dlrcEvaluatorService.LastResult is not DlrcEvaluationResult result)
+        {
+            response = "D-LRC 尚未完成首次评估，当前没有可查询状态。";
+            return false;
+        }
+
+        response = RemoteAdminCommands.DlrcStateReportFormatter.Format(
+            snapshot,
+            result,
+            crisisManager?.CurrentCrisisAssessment);
+        return true;
+    }
+
     public override void OnEnabled()
     {
+        Instance = this;
         roundCoreManager = new RoundCoreManager(Config);
         reinforcementManager = new ReinforcementManager(Config);
         dlrcEvaluatorService = new DlrcEvaluatorService(Config);
+        if (Config.CrisisSystemEnabled)
+        {
+            crisisManager = new CrisisManager(BuildCrisisOptions());
+            crisisManager.CrisisAssessmentUpdated += OnCrisisAssessmentUpdated;
+            crisisManager.CrisisChanged += OnCrisisChanged;
+        }
+        reinforcementManager.MajorWaveCompleted += OnMajorWaveCompleted;
+        dlrcEvaluatorService.EvaluationCompleted += OnDlrcEvaluationCompleted;
 
         ServerEvents.WaitingForPlayers += OnWaitingForPlayers;
         ServerEvents.RestartingRound += OnRestartingRound;
@@ -49,11 +102,7 @@ public sealed class Plugin : Plugin<Config>
         ServerEvents.RespawningTeam += OnRespawningTeam;
         ServerEvents.RespawnedTeam += OnRespawnedTeam;
         ServerEvents.RoundEnded += OnRoundEnded;
-        PlayerEvents.Escaped += OnPlayerEscaped;
         PlayerEvents.Died += OnPlayerDied;
-        PlayerEvents.Hurting += OnPlayerHurting;
-        PlayerEvents.PickingUpItem += OnPlayerPickingUpItem;
-        Scp914Events.UpgradedPickup += OnScp914UpgradedPickup;
         WarheadEvents.Stopping += OnWarheadStopping;
 
         base.OnEnabled();
@@ -70,19 +119,34 @@ public sealed class Plugin : Plugin<Config>
         ServerEvents.RespawningTeam -= OnRespawningTeam;
         ServerEvents.RespawnedTeam -= OnRespawnedTeam;
         ServerEvents.RoundEnded -= OnRoundEnded;
-        PlayerEvents.Escaped -= OnPlayerEscaped;
         PlayerEvents.Died -= OnPlayerDied;
-        PlayerEvents.Hurting -= OnPlayerHurting;
-        PlayerEvents.PickingUpItem -= OnPlayerPickingUpItem;
-        Scp914Events.UpgradedPickup -= OnScp914UpgradedPickup;
         WarheadEvents.Stopping -= OnWarheadStopping;
 
         dlrcEvaluatorService?.CleanupRound("OnDisabled");
+        if (dlrcEvaluatorService is not null)
+        {
+            dlrcEvaluatorService.EvaluationCompleted -= OnDlrcEvaluationCompleted;
+        }
         dlrcEvaluatorService = null;
-        reinforcementManager?.CleanupRound();
+        if (crisisManager is not null)
+        {
+            crisisManager.CrisisAssessmentUpdated -= OnCrisisAssessmentUpdated;
+            crisisManager.CrisisChanged -= OnCrisisChanged;
+            crisisManager.CleanupRound();
+        }
+        crisisManager = null;
+        if (reinforcementManager is not null)
+        {
+            reinforcementManager.MajorWaveCompleted -= OnMajorWaveCompleted;
+        }
+        reinforcementManager?.Dispose();
         reinforcementManager = null;
         roundCoreManager?.CleanupRound();
         roundCoreManager = null;
+        if (ReferenceEquals(Instance, this))
+        {
+            Instance = null;
+        }
 
         Log.Info("[EmergencyEvents] Plugin disabled; Round Core handlers unregistered.");
         base.OnDisabled();
@@ -91,6 +155,7 @@ public sealed class Plugin : Plugin<Config>
     private void OnWaitingForPlayers()
     {
         dlrcEvaluatorService?.ResetForWaitingForPlayers();
+        crisisManager?.CleanupRound();
         reinforcementManager?.ResetForWaitingForPlayers();
         roundCoreManager?.ResetForWaitingForPlayers();
     }
@@ -101,6 +166,7 @@ public sealed class Plugin : Plugin<Config>
             reason => dlrcEvaluatorService?.CleanupRound(reason),
             () => reinforcementManager?.CleanupRound(),
             () => roundCoreManager?.CleanupRound());
+        crisisManager?.CleanupRound();
     }
 
     private void OnRoundStarted()
@@ -111,7 +177,9 @@ public sealed class Plugin : Plugin<Config>
         }
 
         long roundId = roundCoreManager?.State?.RoundId ?? 0;
-        reinforcementManager?.StartRound(roundId);
+        reinforcementManager?.StartRound(
+            roundId,
+            roundCoreManager?.State?.Resolution.Tier ?? PopulationTier.E);
         dlrcEvaluatorService?.StartRound(roundCoreManager?.State, reinforcementManager);
     }
 
@@ -128,36 +196,15 @@ public sealed class Plugin : Plugin<Config>
     private void OnRoundEnded(RoundEndedEventArgs _)
     {
         dlrcEvaluatorService?.CleanupRound("RoundEnded");
+        crisisManager?.CleanupRound();
         reinforcementManager?.CleanupRound();
         roundCoreManager?.CleanupRound();
-    }
-
-    private void OnPlayerEscaped(EscapedEventArgs ev)
-    {
-        reinforcementManager?.HandleEscape(ev);
     }
 
     private void OnPlayerDied(DiedEventArgs ev)
     {
         roundCoreManager?.HandlePlayerDied(ev.Player);
-        reinforcementManager?.HandleScpDeath(ev);
-        reinforcementManager?.HandlePlayerDied(ev.Player.Id);
         dlrcEvaluatorService?.HandlePlayerDied(ev.Player.Id, ev.TargetOldRole);
-    }
-
-    private void OnPlayerHurting(HurtingEventArgs ev)
-    {
-        reinforcementManager?.HandleScpDamage(ev);
-    }
-
-    private void OnPlayerPickingUpItem(PickingUpItemEventArgs ev)
-    {
-        reinforcementManager?.HandleItemPickup(ev);
-    }
-
-    private void OnScp914UpgradedPickup(UpgradedPickupEventArgs ev)
-    {
-        reinforcementManager?.HandleScp914UpgradedPickup(ev);
     }
 
     private void OnWarheadStopping(Exiled.Events.EventArgs.Warhead.StoppingEventArgs ev)
@@ -178,5 +225,45 @@ public sealed class Plugin : Plugin<Config>
     private void OnRespawnedTeam(RespawnedTeamEventArgs ev)
     {
         reinforcementManager?.HandleRespawnedTeam(ev);
+    }
+
+    private void OnMajorWaveCompleted(MajorWaveCompletedEvent ev)
+    {
+        dlrcEvaluatorService?.HandleMajorWaveCompleted(ev);
+    }
+
+    private void OnDlrcEvaluationCompleted(DlrcEvaluationCompletedEvent completedEvent)
+    {
+        crisisManager?.Evaluate(completedEvent);
+    }
+
+    private void OnCrisisAssessmentUpdated(CrisisAssessment assessment)
+    {
+        Log.Debug($"[EmergencyEvents]{CrisisLogFormatter.FormatDetailed(assessment)}");
+    }
+
+    private void OnCrisisChanged(CrisisAssessment? previous, CrisisAssessment current)
+    {
+        Log.Info($"[EmergencyEvents]{CrisisLogFormatter.FormatChange(previous, current)}");
+    }
+
+    private CrisisOptions BuildCrisisOptions()
+    {
+        return new CrisisOptions(
+            Config.CrisisBioThresholdsE,
+            Config.CrisisBioThresholdsD,
+            Config.CrisisBioThresholdsC,
+            Config.CrisisBioThresholdsB,
+            Config.CrisisBioThresholdsA,
+            Config.CrisisSecurityThresholdsE,
+            Config.CrisisSecurityThresholdsD,
+            Config.CrisisSecurityThresholdsC,
+            Config.CrisisSecurityThresholdsB,
+            Config.CrisisSecurityThresholdsA,
+            Config.CrisisContainmentCheckpointSeconds,
+            Config.CrisisContainmentEquivalentReduction,
+            Config.CrisisEndLevel3Seconds,
+            Config.CrisisEndLevel4Seconds,
+            Config.CrisisEndLevel5Seconds);
     }
 }

@@ -1,74 +1,114 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using EmergencyEvents.Evaluation;
+using EmergencyEvents.RoundCore;
 using Exiled.API.Enums;
 using Exiled.API.Features;
 using Exiled.API.Features.Waves;
-using Exiled.API.Features.Pickups;
-using Exiled.Events.EventArgs.Player;
-using Exiled.Events.EventArgs.Scp914;
 using Exiled.Events.EventArgs.Server;
-using EmergencyEvents.Evaluation;
-using InventorySystem.Items.Pickups;
 using MEC;
 using PlayerRoles;
+using Respawning;
 using Respawning.Waves;
 
 namespace EmergencyEvents.Reinforcement;
 
 /// <summary>
-/// 普通支援积分与原版支援波次的运行时边界。
+/// 保留原版 Primary Wave，仅取消 Mini-Wave、截断人数并记录事实历史。
 /// </summary>
 public sealed class ReinforcementManager
 {
-    private const float MajorWaveEvaluationDelaySeconds = 120f;
+    private const float SurvivalObservationDelaySeconds = 120f;
+    private const float TimerExtensionRetryDelaySeconds = 0.1f;
+    private const int MaxTimerExtensionRetryCount = 3;
 
     private readonly Config config;
-    private readonly Random random = new Random();
-    private readonly SupportScoreLedger supportScoreLedger = new SupportScoreLedger();
-    private readonly HashSet<ushort> scp914PickupSerials = new HashSet<ushort>();
+    private readonly List<TimerExtensionWorkItem> pendingNativeWaveCompletions = new List<TimerExtensionWorkItem>();
     private ReinforcementState? state;
-    private bool nativeWavesPaused;
+    private int spawningFactionTimerExtensionSeconds;
+    private int opposingFactionTimerExtensionSeconds;
+
+    private sealed class TimerExtensionWorkItem
+    {
+        public TimerExtensionWorkItem(
+            long roundId,
+            MajorWaveRecord record,
+            TimedWave completedWave,
+            double? foundationTimerBeforeWave,
+            double? chaosTimerBeforeWave)
+        {
+            RoundId = roundId;
+            Record = record;
+            CompletedWave = completedWave;
+            FoundationTimerBeforeWave = foundationTimerBeforeWave;
+            ChaosTimerBeforeWave = chaosTimerBeforeWave;
+        }
+
+        public long RoundId { get; }
+
+        public MajorWaveRecord Record { get; }
+
+        public TimedWave CompletedWave { get; }
+
+        public double? FoundationTimerBeforeWave { get; }
+
+        public double? ChaosTimerBeforeWave { get; }
+
+        public bool VanillaResetConfirmed { get; set; }
+
+        public bool FoundationExtensionApplied { get; set; }
+
+        public bool ChaosExtensionApplied { get; set; }
+
+        public int RetryCount { get; set; }
+
+        public double? FoundationTimerAfterVanillaReset { get; set; }
+
+        public double? ChaosTimerAfterVanillaReset { get; set; }
+
+        public double? FoundationTimePassedAfterVanillaReset { get; set; }
+
+        public double? ChaosTimePassedAfterVanillaReset { get; set; }
+    }
 
     public ReinforcementManager(Config config)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
+        WaveManager.OnWaveSpawned += HandleNativeWaveSpawned;
     }
+
+    public event Action<MajorWaveCompletedEvent>? MajorWaveCompleted;
 
     public ReinforcementState? State => state;
 
-    public void HandlePlayerDied(int playerId)
-    {
-        if (state is null || !state.IsActive)
-        {
-            return;
-        }
-
-        foreach (MajorWaveRecord record in state.MajorWaveHistory)
-        {
-            if (record.IsEvaluationComplete || !record.MemberIds.Remove(playerId))
-            {
-                continue;
-            }
-
-            if (record.MemberIds.Count == 0)
-            {
-                CompleteMajorWave(record, 0, "EarlyTotalWipe");
-            }
-        }
-    }
+    public bool IsRoundActive => IsActive();
 
     public IReadOnlyList<MajorWaveSnapshot> GetMajorWaveHistorySnapshot()
     {
-        if (state is null || !state.IsActive)
+        return state is null || !state.IsActive
+            ? Array.Empty<MajorWaveSnapshot>()
+            : state.MajorWaveHistory.GetSnapshots();
+    }
+
+    public IReadOnlyList<MajorWaveRecord> GetMajorWaveRecords()
+    {
+        return state?.MajorWaveHistory.Records ?? Array.Empty<MajorWaveRecord>();
+    }
+
+    public bool TryGetPrimaryTimerSeconds(out double? foundationSeconds, out double? chaosSeconds)
+    {
+        foundationSeconds = null;
+        chaosSeconds = null;
+        if (!TryGetPrimaryTimers(out TimedWave? foundationTimer, out TimedWave? chaosTimer))
         {
-            return Array.Empty<MajorWaveSnapshot>();
+            return false;
         }
 
-        List<MajorWaveSnapshot> snapshots = state.MajorWaveHistory
-            .Select(record => record.ToSnapshot())
-            .ToList();
-        return snapshots.AsReadOnly();
+        foundationSeconds = foundationTimer!.Timer.TimeLeft.TotalSeconds;
+        chaosSeconds = chaosTimer!.Timer.TimeLeft.TotalSeconds;
+        return true;
     }
 
     public void ResetForWaitingForPlayers()
@@ -76,543 +116,219 @@ public sealed class ReinforcementManager
         CleanupRound();
     }
 
-    public void StartRound(long roundId)
+    public void Dispose()
+    {
+        WaveManager.OnWaveSpawned -= HandleNativeWaveSpawned;
+        CleanupRound();
+    }
+
+    public void StartRound(long roundId, PopulationTier lockedPopulationTier)
     {
         CleanupRound();
-        supportScoreLedger.Clear();
-        scp914PickupSerials.Clear();
-
         if (!config.ReinforcementEnabled)
         {
-            LogInfo(roundId, "Disabled", "ReinforcementEnabled=false，跳过普通支援调度。");
+            LogInfo(roundId, "Disabled", "ReinforcementEnabled=false; 原版支援不受插件影响。");
             return;
         }
 
-        state = new ReinforcementState(roundId);
-        PauseNativeWaves(roundId);
-        float firstWindow = GetFirstWindowSeconds();
-        float deadline = GetDeadlineSeconds(firstWindow);
-        state.NextNormalWaveDueSeconds = firstWindow;
+        spawningFactionTimerExtensionSeconds = PrimaryWaveTimerExtensionPolicy.NormalizeConfiguredSeconds(
+            config.SpawningFactionTimerExtensionSeconds,
+            PrimaryWaveTimerExtensionPolicy.DefaultSpawningFactionSeconds);
+        opposingFactionTimerExtensionSeconds = PrimaryWaveTimerExtensionPolicy.NormalizeConfiguredSeconds(
+            config.OpposingFactionTimerExtensionSeconds,
+            PrimaryWaveTimerExtensionPolicy.DefaultOpposingFactionSeconds);
+        if (config.SpawningFactionTimerExtensionSeconds != spawningFactionTimerExtensionSeconds)
+        {
+            LogWarn(
+                roundId,
+                "TimerExtensionConfig",
+                $"Setting=SpawningFactionTimerExtensionSeconds; Configured={config.SpawningFactionTimerExtensionSeconds}; Applied={spawningFactionTimerExtensionSeconds}; Reason=InvalidConfiguration; Fallback={PrimaryWaveTimerExtensionPolicy.DefaultSpawningFactionSeconds}");
+        }
 
+        if (config.OpposingFactionTimerExtensionSeconds != opposingFactionTimerExtensionSeconds)
+        {
+            LogWarn(
+                roundId,
+                "TimerExtensionConfig",
+                $"Setting=OpposingFactionTimerExtensionSeconds; Configured={config.OpposingFactionTimerExtensionSeconds}; Applied={opposingFactionTimerExtensionSeconds}; Reason=InvalidConfiguration; Fallback={PrimaryWaveTimerExtensionPolicy.DefaultOpposingFactionSeconds}");
+        }
+
+        state = new ReinforcementState(roundId, lockedPopulationTier);
         LogInfo(
             roundId,
             "RoundStarted",
-            $"FirstWaveWindow={FormatSeconds(firstWindow)}; Deadline={FormatSeconds(deadline)}; NormalWaveInterval={FormatSeconds(GetNormalIntervalSeconds())}; MiniWaves=Disabled; PluginManagedWaves=true; NativeWavesPaused={nativeWavesPaused}; ManualRaWaves=true; CarryoverRatio={GetCarryoverRatio():0.####}; ClassDValue={config.ClassDSupportScore}; ScientistValue={config.ScientistSupportScore}");
-
-        ScheduleFirstWaveMonitor(roundId, 1f);
-    }
-
-    public void HandleEscape(EscapedEventArgs ev)
-    {
-        if (state is null || !state.IsActive)
-        {
-            return;
-        }
-
-        Player player = ev.Player;
-        string oldRole = ev.OldRole is null ? "Unknown" : ev.OldRole.Type.ToString();
-
-        if (!state.ScoredEscapePlayerIds.Add(player.Id))
-        {
-            LogWarn(
-                state.RoundId,
-                "DuplicateEscapeScoreAttempt",
-                $"Player={player.Id}; OldRole={oldRole}; Scenario={ev.EscapeScenario}; NewScoreRejected=true; Reason=EscapeAlreadyScoredThisRound");
-            return;
-        }
-
-        if (!TryResolveEscapeCredit(ev.EscapeScenario, out bool foundationCredit, out int scoreValue, out string reason))
-        {
-            LogDebug(
-                state.RoundId,
-                "EscapeIgnored",
-                $"Player={player.Id}; OldRole={oldRole}; Scenario={ev.EscapeScenario}; SupportScoreChange=0; Reason=UnsupportedEscapeScenario");
-            return;
-        }
-
-        int foundationBefore = state.FoundationSupportScore;
-        int chaosBefore = state.ChaosSupportScore;
-
-        if (foundationCredit)
-        {
-            state.FoundationSupportScore += scoreValue;
-        }
-        else
-        {
-            state.ChaosSupportScore += scoreValue;
-        }
-
-        LogInfo(
-            state.RoundId,
-            "EscapeScored",
-            $"Player={player.Id}; OldRole={oldRole}; Scenario={ev.EscapeScenario}; FoundationBefore={foundationBefore}; FoundationAfter={state.FoundationSupportScore}; ChaosBefore={chaosBefore}; ChaosAfter={state.ChaosSupportScore}; Added={(foundationCredit ? "Foundation" : "Chaos")}:{scoreValue}; Reason={reason}");
-    }
-
-    public void HandleScpDeath(DiedEventArgs ev)
-    {
-        if (state is null || !state.IsActive || !IsMainScpRole(ev.TargetOldRole))
-        {
-            return;
-        }
-
-        string scpId = $"Player:{ev.Player.Id}";
-        SupportFaction faction = ResolveSupportFaction(ev.Attacker);
-        bool scored = supportScoreLedger.TryScoreScpDeath(scpId, faction, out int score);
-        AddSupportScore(faction, score);
-        LogInfo(
-            state.RoundId,
-            scored ? "ScpDeathScored" : "ScpDeathIgnored",
-            $"ScpId={scpId}; Role={ev.TargetOldRole}; AwardedFaction={faction}; Score={score}; FoundationScore={state.FoundationSupportScore}; ChaosScore={state.ChaosSupportScore}; Reason={(scored ? "MainScpDeath" : "DuplicateOrUnsupportedFaction")}");
-    }
-
-    public void HandleScpDamage(HurtingEventArgs ev)
-    {
-        if (state is null || !state.IsActive || !IsMainScpRole(ev.Player.Role.Type))
-        {
-            return;
-        }
-
-        double maxHealth = ev.Player.MaxHealth;
-        SupportFaction faction = ResolveSupportFaction(ev.Attacker);
-        IReadOnlyList<SupportThresholdAward> awards = supportScoreLedger.RecordScpDamage(
-            $"Player:{ev.Player.Id}",
-            Math.Max(0d, ev.Amount),
-            maxHealth,
-            faction);
-
-        foreach (SupportThresholdAward award in awards)
-        {
-            AddSupportScore(faction, award.Score);
-            LogInfo(
-                state.RoundId,
-                "ScpDamageThresholdScored",
-                $"ScpId=Player:{ev.Player.Id}; Threshold={award.ThresholdPercent}%; AwardedFaction={award.Faction}; Score={award.Score}; Damage={ev.Amount:0.####}; MaxHealth={maxHealth:0.####}");
-        }
-    }
-
-    public void HandleItemPickup(PickingUpItemEventArgs ev)
-    {
-        if (state is null || !state.IsActive || ev.Pickup is null)
-        {
-            return;
-        }
-
-        SupportItemKind itemKind = ResolveSupportItemKind(ev.Pickup.Type);
-        if (itemKind == SupportItemKind.None)
-        {
-            return;
-        }
-
-        ushort itemSerial = ev.Pickup.Serial;
-        SupportFaction faction = ResolveSupportFaction(ev.Player);
-        bool createdByScp914 = scp914PickupSerials.Contains(itemSerial);
-        bool scored = supportScoreLedger.TryScoreItem(
-            itemSerial,
-            itemKind,
-            faction,
-            createdByScp914,
-            out int score);
-        AddSupportScore(faction, score);
-
-        LogInfo(
-            state.RoundId,
-            scored ? "ScpItemPickupScored" : "ScpItemPickupIgnored",
-            $"ItemSerial={itemSerial}; ItemType={ev.Pickup.Type}; ItemKind={itemKind}; AwardedFaction={faction}; Score={score}; CreatedByScp914={createdByScp914}; Reason={(scored ? "FirstEligiblePickup" : "DuplicateOrUnsupportedPickup")}");
-    }
-
-    public void HandleScp914UpgradedPickup(UpgradedPickupEventArgs ev)
-    {
-        if (state is null || !state.IsActive || ev.Result is null)
-        {
-            return;
-        }
-
-        foreach (ItemPickupBase result in ev.Result)
-        {
-            Pickup? pickup = Pickup.Get(result);
-            if (pickup is not null)
-            {
-                scp914PickupSerials.Add(pickup.Serial);
-                LogDebug(state.RoundId, "Scp914PickupMarked", $"ItemSerial={pickup.Serial}; ItemType={pickup.Type}; Reason=Scp914Output");
-            }
-        }
+            $"LockedPopulationTier={lockedPopulationTier}; PrimaryWave=VanillaPreserved; MiniWaveDisabled={config.DisableMiniWaves}; PrimaryWaveCap={GetCaps().GetCap(lockedPopulationTier)}; SpawningFactionTimerExtensionSeconds={spawningFactionTimerExtensionSeconds}; OpposingFactionTimerExtensionSeconds={opposingFactionTimerExtensionSeconds}; NativeTimers=Unchanged; NativeFactionAndTokens=Unchanged");
     }
 
     public void HandleSelectingRespawnTeam(SelectingRespawnTeamEventArgs ev)
     {
-        if (state is null || !state.IsActive || ev.Wave is null)
-        {
-            return;
-        }
-
-        float elapsed = GetElapsedSeconds();
-        RefreshFirstWaveWindowState(elapsed);
-        bool isMiniWave = ev.Wave.IsMiniWave;
-
-        if (isMiniWave)
-        {
-            ev.IsAllowed = false;
-            state.PluginWaveRequestPending = false;
-            state.PluginWaveInProgress = false;
-            state.ManualWaveInProgress = false;
-            LogInfo(
-                state.RoundId,
-                "MiniWaveCancelled",
-                $"Elapsed={FormatSeconds(elapsed)}; OriginalFaction={ev.Team}; OriginalWave={ev.Wave.Name}; Reason=MiniWavesDisabled");
-            return;
-        }
-
-        if (!state.PluginWaveRequestPending)
-        {
-            if (WaveControlPolicy.ShouldAllowManualNormalWave(nativeWavesPaused, false))
-            {
-                ev.IsAllowed = true;
-                state.PluginWaveRequestPending = false;
-                state.PluginWaveInProgress = true;
-                state.ManualWaveInProgress = true;
-                LogInfo(
-                    state.RoundId,
-                    "ManualWaveAllowed",
-                    $"Elapsed={FormatSeconds(elapsed)}; OriginalFaction={ev.Team}; OriginalWave={ev.Wave.Name}; IsMiniWave=false; NativeWavesPaused=true; Origin=RA");
-                return;
-            }
-
-            ev.IsAllowed = false;
-            LogDebug(
-                state.RoundId,
-                "NativeWaveSuppressed",
-                $"Elapsed={FormatSeconds(elapsed)}; OriginalFaction={ev.Team}; OriginalWave={ev.Wave.Name}; NextNormalWaveDue={FormatSeconds(state.NextNormalWaveDueSeconds)}; Reason=PluginManagedWavesOnly");
-            return;
-        }
-
-        state.PluginWaveRequestPending = false;
-        state.PluginWaveInProgress = true;
-        state.ManualWaveInProgress = false;
-        bool isFirstWave = state.FirstWaveState == FirstWaveState.Requested
-            && !state.FirstWaveSelectionHandled;
-
-        SpawnableFaction selectedFaction = state.RequestedWaveFaction ?? SpawnableFaction.None;
-        if (selectedFaction == SpawnableFaction.None)
-        {
-            state.PluginWaveInProgress = false;
-            state.ManualWaveInProgress = false;
-            ev.IsAllowed = false;
-            LogWarn(state.RoundId, "WaveOverrideCancelled", $"Elapsed={FormatSeconds(elapsed)}; OriginalFaction={ev.Team}; Reason=PluginFactionMissing");
-            return;
-        }
-
-        state.RequestedWaveFaction = null;
-        string selectionReason = isFirstWave ? "FirstWaveDecision" : "SupportScoreDecision";
-
-        TimedWave? selectedWave = FindTimedWave(selectedFaction, false);
-        if (selectedWave is null)
-        {
-            ev.IsAllowed = false;
-            if (isFirstWave)
-            {
-                state.FirstWaveState = FirstWaveState.WaitingForObservers;
-                state.HasFirstWaveFaction = false;
-                state.FirstWaveFaction = SpawnableFaction.None;
-            }
-
-            state.PluginWaveInProgress = false;
-            state.ManualWaveInProgress = false;
-
-            LogWarn(
-                state.RoundId,
-                "WaveOverrideCancelled",
-                $"Elapsed={FormatSeconds(elapsed)}; OriginalFaction={ev.Team}; RequestedFaction={selectedFaction}; IsMiniWave=false; Reason=NativeNormalWaveNotFound");
-            return;
-        }
-
-        SpawnableFaction originalFaction = ev.Team;
-        ev.Wave = selectedWave;
-        if (isFirstWave)
-        {
-            state.FirstWaveSelectionHandled = true;
-        }
-
-        LogInfo(
-            state.RoundId,
-            isFirstWave ? "FirstWaveSelected" : "WaveSelected",
-            $"Elapsed={FormatSeconds(elapsed)}; OriginalFaction={originalFaction}; SelectedFaction={selectedFaction}; Wave={selectedWave.Name}; IsMiniWave=false; FoundationScore={state.FoundationSupportScore}; ChaosScore={state.ChaosSupportScore}; Reason={(isFirstWave ? "FirstWaveDecision" : selectionReason)}");
+        // 选择阶段必须保留原版流程，否则原版会在同一个计时点反复重试选择事件。
     }
 
     public void HandleRespawningTeam(RespawningTeamEventArgs ev)
     {
-        if (state is null || !state.IsActive)
+        if (!IsActive())
         {
             return;
         }
 
-        if (ev.Wave is null)
-        {
-            ClearPendingWaveState();
-            state.PluginWaveInProgress = false;
-            state.ManualWaveInProgress = false;
-            LogWarn(state.RoundId, "RespawningTeamMissingWave", "Pending wave state cleared because the respawn event had no wave.");
-            return;
-        }
-
-        TimedWave? originalWave = ev.Wave;
-        bool isMiniWave = originalWave?.IsMiniWave ?? false;
-
-        if (isMiniWave)
+        TimedWave wave = ev.Wave;
+        if (PrimaryWavePolicy.ShouldCancelMiniWaveAtBoundary(
+                wave.IsMiniWave,
+                config.DisableMiniWaves,
+                MiniWaveCancellationBoundary.RespawningTeam))
         {
             ev.IsAllowed = false;
-            state.PluginWaveRequestPending = false;
-            state.PluginWaveInProgress = false;
-            state.ManualWaveInProgress = false;
-            state.PendingWaveFaction = null;
-            state.PendingWaveIsMini = false;
-            state.PendingWavePlayerCount = 0;
-            state.PendingWavePlayerIds.Clear();
+            state!.ClearPendingPrimaryWave();
             LogInfo(
                 state.RoundId,
-                "MiniWaveCancelled",
-                $"Elapsed={FormatSeconds(GetElapsedSeconds())}; OriginalFaction={originalWave?.SpawnableFaction}; OriginalWave={originalWave?.Name ?? ev.Wave.GetType().Name}; Reason=MiniWavesDisabled");
+                "MiniWave",
+                $"Requested=true; Action=Cancelled; Reason=DisabledByEmergencyEvents; Wave={wave.Name}; Faction={wave.SpawnableFaction}; Boundary=RespawningTeam");
             return;
         }
 
-        if (!WaveControlPolicy.ShouldAllowTriggeredRespawn(
-                state.PluginWaveRequestPending,
-                state.PluginWaveInProgress,
-                false))
+        if (!PrimaryWaveTimerExtensionPolicy.IsPrimaryFaction(wave.SpawnableFaction.ToString()))
         {
-            ev.IsAllowed = false;
-            ClearPendingWaveState();
-            LogDebug(
-                state.RoundId,
-                "NativeWaveSuppressed",
-                $"Elapsed={FormatSeconds(GetElapsedSeconds())}; OriginalFaction={originalWave?.SpawnableFaction}; OriginalWave={originalWave?.Name ?? ev.Wave.GetType().Name}; NextNormalWaveDue={FormatSeconds(state.NextNormalWaveDueSeconds)}; Reason=PluginManagedWavesOnly");
+            state!.ClearPendingPrimaryWave();
+            LogDetailed(
+                state!.RoundId,
+                "PrimaryWaveIgnored",
+                $"Wave={wave.Name}; Faction={wave.SpawnableFaction}; Reason=NonPrimaryFaction");
             return;
         }
 
-        state.PluginWaveRequestPending = false;
-        state.PluginWaveInProgress = true;
-        state.ManualWaveInProgress = false;
-        state.RequestedWaveFaction = null;
-
-        bool isFirstWave = state.FirstWaveState == FirstWaveState.Requested
-            && !state.FirstWaveRespawnStarted
-            && state.FirstWaveSelectionHandled;
-
-        if (isFirstWave)
+        int originalMaximum = ev.MaximumRespawnAmount;
+        int cappedMaximum = PrimaryWavePolicy.GetCappedMaximumRespawnAmount(
+            originalMaximum,
+            state!.LockedPopulationTier,
+            GetCaps());
+        if (cappedMaximum < originalMaximum)
         {
-            TimedWave? selectedWave = FindTimedWave(state.FirstWaveFaction, false);
-            if (selectedWave is not null)
-            {
-                ev.Wave = selectedWave;
-            }
+            ev.MaximumRespawnAmount = cappedMaximum;
+        }
 
-            int beforeFilter = ev.Players.Count;
-            List<int> excludedPlayers = ev.Players
-                .Where(player => !IsEligibleObserver(player))
-                .Select(player => player.Id)
-                .ToList();
-            List<Player> eligibleObservers = GetEligibleObservers();
-
-            ev.Players.Clear();
-            ev.Players.AddRange(eligibleObservers);
-            ev.MaximumRespawnAmount = ev.Players.Count;
-
-            LogInfo(
+        if (!ev.IsAllowed)
+        {
+            state.ClearPendingPrimaryWave();
+            LogDetailed(
                 state.RoundId,
-                "FirstWaveRespawning",
-                $"Elapsed={FormatSeconds(GetElapsedSeconds())}; Faction={state.FirstWaveFaction}; EligibleObservers={ev.Players.Count}; BeforeFilter={beforeFilter}; ExcludedOverwatch={string.Join(",", excludedPlayers)}; RequestedSpawnCount={ev.Players.Count}; IsMiniWave=false");
-
-            if (ev.Players.Count == 0)
-            {
-                ev.IsAllowed = false;
-                state.FirstWaveRespawnStarted = false;
-                state.FirstWaveSelectionHandled = false;
-                state.HasFirstWaveFaction = false;
-                state.FirstWaveFaction = SpawnableFaction.None;
-                state.FirstWaveState = FirstWaveState.WaitingForObservers;
-                state.PendingWaveFaction = null;
-                state.PendingWaveIsMini = false;
-                state.PendingWavePlayerCount = 0;
-                state.PendingWavePlayerIds.Clear();
-                state.PluginWaveInProgress = false;
-                state.ManualWaveInProgress = false;
-                LogWarn(state.RoundId, "FirstWaveCancelled", "Respawn event contained no eligible normal observers; will continue waiting until the deadline.");
-                return;
-            }
-
-            state.FirstWaveRespawnStarted = true;
-        }
-        else
-        {
-            List<Player> eligibleObservers = GetEligibleObservers();
-            ev.Players.Clear();
-            ev.Players.AddRange(eligibleObservers);
-            ev.MaximumRespawnAmount = ev.Players.Count;
-
-            if (ev.Players.Count == 0)
-            {
-                ev.IsAllowed = false;
-                state.PluginWaveInProgress = false;
-                state.ManualWaveInProgress = false;
-                ClearPendingWaveState();
-                LogWarn(state.RoundId, "WaveCancelled", $"Elapsed={FormatSeconds(GetElapsedSeconds())}; Reason=NoEligibleObservers");
-                return;
-            }
+                "PrimaryWaveIgnored",
+                $"Wave={wave.Name}; Faction={wave.SpawnableFaction}; Reason=DeniedByEarlierHandler");
+            return;
         }
 
-        SpawnableFaction faction = ev.Wave.SpawnableFaction;
-        if (faction == SpawnableFaction.None && state.FirstWaveState == FirstWaveState.Requested)
-        {
-            faction = state.FirstWaveFaction;
-        }
-        state.PendingWaveFaction = faction == SpawnableFaction.None ? null : faction;
-        state.PendingWaveIsMini = isMiniWave;
-        state.PendingWavePlayerCount = ev.Players.Count;
-        state.PendingWavePlayerIds.Clear();
-        foreach (Player player in ev.Players)
-        {
-            state.PendingWavePlayerIds.Add(player.Id);
-        }
-
-        LogDebug(
+        state.HasPendingPrimaryWave = true;
+        state.PendingWaveName = wave.Name;
+        state.PendingFaction = wave.SpawnableFaction.ToString();
+        state.PendingStartedAt = DateTime.UtcNow;
+        CapturePendingTimerSnapshot(state);
+        LogDetailed(
             state.RoundId,
-            "RespawningTeam",
-            $"Elapsed={FormatSeconds(GetElapsedSeconds())}; Faction={faction}; Wave={(originalWave?.Name ?? ev.Wave.GetType().Name)}; IsMiniWave={isMiniWave}; Players={ev.Players.Count}; Maximum={ev.MaximumRespawnAmount}; Allowed={ev.IsAllowed}");
+            "PrimaryWavePrepared",
+            $"Wave={wave.Name}; Faction={wave.SpawnableFaction}; LockedPopulationTier={state.LockedPopulationTier}; VanillaMaximum={originalMaximum}; AppliedMaximum={cappedMaximum}; VanillaSelectedPlayersAfter={ev.Players.Count}; Selection=VanillaPreserved; Allowed={ev.IsAllowed}");
     }
 
     public void HandleRespawnedTeam(RespawnedTeamEventArgs ev)
     {
-        if (state is null || !state.IsActive)
+        if (!IsActive() || !state!.HasPendingPrimaryWave)
         {
             return;
         }
 
-        if (ev.Wave is null)
-        {
-            ClearPendingWaveState();
-            state.PluginWaveInProgress = false;
-            state.ManualWaveInProgress = false;
-            LogWarn(state.RoundId, "RespawnedTeamMissingWave", "Pending wave state cleared because the respawned event had no wave.");
-            return;
-        }
-
-        if (!state.PluginWaveInProgress)
-        {
-            LogDebug(
-                state.RoundId,
-                "NativeWaveSuppressed",
-                $"Elapsed={FormatSeconds(GetElapsedSeconds())}; Wave={ev.Wave.GetType().Name}; Reason=PluginManagedWavesOnly");
-            return;
-        }
-
-        TimedWave? actualWave = FindTimedWave(ev.Wave);
-        SpawnableFaction faction = ResolveFaction(ev.Wave, state.PendingWaveFaction ?? SpawnableFaction.None);
-        List<Player> spawnedPlayers = ev.Players.ToList();
-        int playerCount = spawnedPlayers.Count;
-
-        if (actualWave?.IsMiniWave == true || state.PendingWaveIsMini)
+        string pendingWaveName = state.PendingWaveName;
+        string pendingFaction = state.PendingFaction;
+        DateTime pendingStartedAt = state.PendingStartedAt;
+        double? foundationTimerBeforeWave = state.PendingFoundationTimerBeforeWave;
+        double? chaosTimerBeforeWave = state.PendingChaosTimerBeforeWave;
+        state.ClearPendingPrimaryWave();
+        TimedWave? wave = FindTimedWave(ev.Wave);
+        if (wave is not null && PrimaryWavePolicy.ShouldCancelMiniWave(wave.IsMiniWave, config.DisableMiniWaves))
         {
             LogWarn(
                 state.RoundId,
-                "MiniWaveRejectedLate",
-                $"Elapsed={FormatSeconds(GetElapsedSeconds())}; Faction={faction}; Wave={(actualWave?.Name ?? ev.Wave.GetType().Name)}; ActualSpawnCount={playerCount}; Reason=MiniWavesDisabled");
-            state.PendingWaveFaction = null;
-            state.PendingWaveIsMini = false;
-            state.PendingWavePlayerCount = 0;
-            state.PendingWavePlayerIds.Clear();
-            state.PluginWaveInProgress = false;
-            state.ManualWaveInProgress = false;
+                "MiniWave",
+                $"Requested=true; Action=UnexpectedRespawnObserved; Reason=CancellationBypassed; Wave={wave.Name}; Faction={wave.SpawnableFaction}");
             return;
         }
 
-        if (playerCount <= 0)
+        string observedFaction = wave?.SpawnableFaction.ToString() ?? pendingFaction;
+        if (!PrimaryWaveTimerExtensionPolicy.IsPrimaryFaction(observedFaction))
         {
-            LogWarn(
+            LogDetailed(
                 state.RoundId,
-                "RespawnedTeamEmpty",
-                $"Elapsed={FormatSeconds(GetElapsedSeconds())}; Faction={faction}; Wave={(actualWave?.Name ?? ev.Wave.GetType().Name)}; SupportCycleCommitted=false; Reason=NoPlayersSpawned");
-            state.PendingWaveFaction = null;
-            state.PendingWaveIsMini = false;
-            state.PendingWavePlayerCount = 0;
-            state.PendingWavePlayerIds.Clear();
-            state.PluginWaveInProgress = false;
-            state.ManualWaveInProgress = false;
+                "PrimaryWaveIgnored",
+                $"Wave={(wave?.Name ?? pendingWaveName)}; Faction={observedFaction}; Reason=NonPrimaryFaction");
             return;
         }
 
-        bool hasNormalWaveEvidence = actualWave is not null
-            || state.PendingWaveFaction.HasValue
-            || state.PendingWavePlayerCount > 0;
-        if (!hasNormalWaveEvidence)
+        List<Player> candidatePlayers = ev.Players.ToList();
+        List<Player> spawnedPlayers = GetActuallySpawnedPlayers(candidatePlayers, wave);
+        if (spawnedPlayers.Count == 0)
         {
-            LogWarn(
+            LogInfo(
                 state.RoundId,
-                "RespawnedTeamUnknownWave",
-                $"Elapsed={FormatSeconds(GetElapsedSeconds())}; Faction={faction}; ActualSpawnCount={playerCount}; SupportCycleCommitted=false; Reason=NormalWaveIdentityUnavailable");
-            ClearPendingWaveState();
-            state.PluginWaveInProgress = false;
-            state.ManualWaveInProgress = false;
+                "PrimaryWaveEmpty",
+                $"Wave={(wave?.Name ?? pendingWaveName)}; Faction={(wave?.SpawnableFaction.ToString() ?? pendingFaction)}; CandidateCount={candidatePlayers.Count}; ActualSpawnedCount=0; Action=NotRecorded; Reason=NoSuccessfulRoleAssignment");
+            LogTimerExtensionSkipped(
+                state.RoundId,
+                "Unavailable",
+                wave?.SpawnableFaction.ToString() ?? pendingFaction,
+                0,
+                "ZeroSpawn");
             return;
         }
 
-        state.SupportCycleCount++;
-        bool wasManualWave = state.ManualWaveInProgress;
-        if (state.FirstWaveState == FirstWaveState.Requested && !state.PendingWaveIsMini)
-        {
-            state.FirstWaveState = FirstWaveState.Completed;
-        }
-
-        DateTime waveStartedAtUtc = DateTime.UtcNow;
-        state.LastWaveStartedAtUtc = waveStartedAtUtc;
-        state.LastWaveName = actualWave?.Name ?? ev.Wave.GetType().Name;
-        float completedElapsed = GetElapsedSeconds();
-        state.NextNormalWaveDueSeconds = FirstWavePolicy.GetNextFixedWaveDue(
-            state.NextNormalWaveDueSeconds,
-            GetNormalIntervalSeconds());
-
-        LogInfo(
-            state.RoundId,
-            "SupportCycleCompleted",
-            $"Elapsed={FormatSeconds(completedElapsed)}; Cycle={state.SupportCycleCount}; Faction={faction}; Wave={state.LastWaveName}; IsMiniWave=false; Origin={(wasManualWave ? "RA" : "Plugin")}; ActualSpawnCount={playerCount}; NextNormalWaveDue={FormatSeconds(state.NextNormalWaveDueSeconds)}; FirstWaveState={state.FirstWaveState}");
-
-        MajorWaveRecord record = new MajorWaveRecord(
-            state.LastWaveName,
-            playerCount,
+        string waveName = wave?.Name ?? pendingWaveName;
+        string faction = observedFaction;
+        DateTime completedAt = DateTime.UtcNow;
+        string waveId = $"{state.RoundId}-MW-{++state.NextWaveSequence:000}";
+        MajorWaveRecord record = state.MajorWaveHistory.Record(
+            waveId,
+            faction,
+            state.LockedPopulationTier,
+            spawnedPlayers.Count,
             spawnedPlayers.Select(player => player.Id),
-            waveStartedAtUtc);
-        state.MajorWaveHistory.Add(record);
+            pendingStartedAt,
+            completedAt);
         LogInfo(
             state.RoundId,
-            "MajorWaveRecorded",
-            $"Wave={record.Name}; StartingCount={record.StartingCount}; StartedAt={record.StartedAt:O}; EvaluationDelay={MajorWaveEvaluationDelaySeconds:0}s");
-        ScheduleMajorWaveEvaluation(state.RoundId, record);
+            "PrimaryWaveCompleted",
+            $"WaveId={record.WaveId}; Wave={waveName}; Faction={record.Faction}; LockedPopulationTier={record.PopulationTier}; CandidateCount={candidatePlayers.Count}; StartedAt={record.StartedAt:O}; ActualSpawnedCount={record.ActualSpawnedCount}; CompletedAt={record.CompletedAt:O}; MemberCount={record.MemberIds.Count}");
 
-        ApplyScoreCarryover();
-        state.PluginWaveInProgress = false;
-        state.ManualWaveInProgress = false;
-        state.PendingWaveFaction = null;
-        state.PendingWaveIsMini = false;
-        state.PendingWavePlayerCount = 0;
-        state.PendingWavePlayerIds.Clear();
+        if (wave is null)
+        {
+            LogTimerExtensionSkipped(
+                state.RoundId,
+                record.WaveId,
+                record.Faction,
+                record.ActualSpawnedCount,
+                "NativeWaveReferenceUnavailable");
+            PublishMajorWaveCompleted(record);
+            ScheduleSurvivalObservation(state.RoundId, record);
+            return;
+        }
+
+        QueueTimerExtensionUntilNativeWaveCompletion(
+            state.RoundId,
+            record,
+            wave,
+            foundationTimerBeforeWave,
+            chaosTimerBeforeWave);
+        ScheduleSurvivalObservation(state.RoundId, record);
     }
 
     public void CleanupRound()
     {
+        pendingNativeWaveCompletions.Clear();
         if (state is null)
         {
-            ResumeNativeWaves(0);
-            supportScoreLedger.Clear();
-            scp914PickupSerials.Clear();
             return;
         }
 
         long roundId = state.RoundId;
         state.IsActive = false;
-        int majorWaveHistoryCount = state.MajorWaveHistory.Count;
+        int historyCount = state.MajorWaveHistory.Count;
         int scheduledHandleCount = state.ScheduledHandles.Count;
-        LogInfo(
-            roundId,
-            "Cleanup",
-            $"FirstWaveState={state.FirstWaveState}; SupportCycles={state.SupportCycleCount}; FoundationScore={state.FoundationSupportScore}; ChaosScore={state.ChaosSupportScore}; ScoredEscapes={state.ScoredEscapePlayerIds.Count}; MajorWaveHistory={majorWaveHistoryCount}; ScheduledHandles={scheduledHandleCount}");
         foreach (CoroutineHandle handle in state.ScheduledHandles)
         {
             Timing.KillCoroutines(handle);
@@ -620,62 +336,488 @@ public sealed class ReinforcementManager
 
         state.ScheduledHandles.Clear();
         state.MajorWaveHistory.Clear();
-        state.PendingWavePlayerIds.Clear();
+        state.ClearPendingPrimaryWave();
         LogInfo(
             roundId,
-            "CleanupHandlesCleared",
-            $"MajorWaveHistoryCleared={majorWaveHistoryCount}; ScheduledHandlesCleared={scheduledHandleCount}; PendingWavePlayerIdsCleared=true");
+            "Cleanup",
+            $"MajorWaveHistoryCleared={historyCount}; ScheduledHandlesCleared={scheduledHandleCount}; PendingPrimaryWaveCleared=true");
         state = null;
-        ResumeNativeWaves(roundId);
-        supportScoreLedger.Clear();
-        scp914PickupSerials.Clear();
     }
 
-    private void ScheduleFirstWaveMonitor(long roundId, float delay)
+    public void SuspendRound(string reason)
     {
-        if (state is null || !state.IsActive || state.RoundId != roundId)
+        pendingNativeWaveCompletions.Clear();
+        if (state is null || !state.IsActive)
+        {
+            return;
+        }
+
+        int scheduledHandleCount = state.ScheduledHandles.Count;
+        foreach (CoroutineHandle handle in state.ScheduledHandles)
+        {
+            Timing.KillCoroutines(handle);
+        }
+
+        state.ScheduledHandles.Clear();
+        state.ClearPendingPrimaryWave();
+        state.IsActive = false;
+        LogInfo(
+            state.RoundId,
+            "Suspended",
+            $"Reason={reason}; MajorWaveHistoryRetained={state.MajorWaveHistory.Count}; ScheduledHandlesStopped={scheduledHandleCount}; PendingPrimaryWaveCleared=true");
+    }
+
+    private void PublishMajorWaveCompleted(MajorWaveRecord record)
+    {
+        if (state is null || !state.MajorWaveHistory.TryMarkPostMajorWavePublished(record))
+        {
+            return;
+        }
+
+        MajorWaveCompletedEvent completedEvent = new MajorWaveCompletedEvent(state.RoundId, record);
+        LogInfo(
+            state.RoundId,
+            "POST_MAJOR_WAVE",
+            $"WaveId={completedEvent.WaveId}; Faction={completedEvent.Faction}; PopulationTier={completedEvent.PopulationTier}; ActualSpawnedCount={completedEvent.ActualSpawnedCount}; CompletedAt={completedEvent.CompletedAt:O}");
+        try
+        {
+            MajorWaveCompleted?.Invoke(completedEvent);
+        }
+        catch (Exception exception)
+        {
+            LogError(state.RoundId, "POST_MAJOR_WAVE_FAILED", exception);
+        }
+    }
+
+    private void QueueTimerExtensionUntilNativeWaveCompletion(
+        long roundId,
+        MajorWaveRecord record,
+        TimedWave completedWave,
+        double? foundationTimerBeforeWave,
+        double? chaosTimerBeforeWave)
+    {
+        if (!IsActiveRound(roundId))
+        {
+            return;
+        }
+
+        pendingNativeWaveCompletions.Add(
+            new TimerExtensionWorkItem(
+                roundId,
+                record,
+                completedWave,
+                foundationTimerBeforeWave,
+                chaosTimerBeforeWave));
+    }
+
+    private void HandleNativeWaveSpawned(SpawnableWaveBase nativeWave, List<ReferenceHub> _)
+    {
+        if (!IsActive() || pendingNativeWaveCompletions.Count == 0)
+        {
+            return;
+        }
+
+        int workIndex = pendingNativeWaveCompletions.FindIndex(
+            workItem => ReferenceEquals(workItem.CompletedWave.Base, nativeWave));
+        if (workIndex < 0)
+        {
+            return;
+        }
+
+        TimerExtensionWorkItem workItem = pendingNativeWaveCompletions[workIndex];
+        string waveFaction = workItem.CompletedWave.SpawnableFaction.ToString();
+        bool shouldConfirmVanillaReset = ShouldConfirmVanillaReset(
+            waveFaction,
+            workItem.CompletedWave.IsMiniWave,
+            workItem.Record.ActualSpawnedCount);
+        if (shouldConfirmVanillaReset
+            && !workItem.VanillaResetConfirmed
+            && (!TryGetPrimaryTimers(out TimedWave? foundationTimer, out TimedWave? chaosTimer)
+                || !IsVanillaResetDetected(waveFaction, foundationTimer!, chaosTimer!)))
+        {
+            pendingNativeWaveCompletions.RemoveAt(workIndex);
+            LogTimerExtensionSkipped(
+                workItem.RoundId,
+                workItem.Record.WaveId,
+                waveFaction,
+                workItem.Record.ActualSpawnedCount,
+                "VanillaResetNotDetected");
+            PublishMajorWaveCompleted(workItem.Record);
+            return;
+        }
+
+        workItem.VanillaResetConfirmed |= shouldConfirmVanillaReset;
+        ProcessTimerExtensionWorkItem(workItem);
+    }
+
+    private void ProcessTimerExtensionWorkItem(TimerExtensionWorkItem workItem)
+    {
+        if (!IsActiveRound(workItem.RoundId)
+            || !pendingNativeWaveCompletions.Contains(workItem))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!ApplyPrimaryWaveTimerExtension(workItem))
+            {
+                return;
+            }
+
+            pendingNativeWaveCompletions.Remove(workItem);
+            PublishMajorWaveCompleted(workItem.Record);
+        }
+        catch (Exception exception)
+        {
+            LogError(workItem.RoundId, "TIMER_EXTENSION_FAILED", exception);
+            if (workItem.RetryCount < MaxTimerExtensionRetryCount)
+            {
+                ScheduleTimerExtensionRetry(workItem);
+                return;
+            }
+
+            pendingNativeWaveCompletions.Remove(workItem);
+            workItem.Record.TryMarkTimerExtensionProcessed();
+            LogTimerExtensionSkipped(
+                workItem.RoundId,
+                workItem.Record.WaveId,
+                workItem.CompletedWave.SpawnableFaction.ToString(),
+                workItem.Record.ActualSpawnedCount,
+                "ExceptionAfterRetries",
+                workItem.VanillaResetConfirmed);
+            PublishMajorWaveCompleted(workItem.Record);
+        }
+    }
+
+    private void ScheduleTimerExtensionRetry(TimerExtensionWorkItem workItem)
+    {
+        workItem.RetryCount++;
+        LogWarn(
+            workItem.RoundId,
+            "TimerExtensionRetry",
+            $"WaveId={workItem.Record.WaveId}; Retry={workItem.RetryCount}; MaxRetries={MaxTimerExtensionRetryCount}; DelaySeconds={TimerExtensionRetryDelaySeconds.ToString("0.###", CultureInfo.InvariantCulture)}");
+
+        try
+        {
+            CoroutineHandle handle = default(CoroutineHandle);
+            handle = Timing.CallDelayed(
+                TimerExtensionRetryDelaySeconds,
+                () =>
+                {
+                    try
+                    {
+                        ProcessTimerExtensionWorkItem(workItem);
+                    }
+                    finally
+                    {
+                        RemoveScheduledHandle(workItem.RoundId, handle);
+                    }
+                });
+            state!.ScheduledHandles.Add(handle);
+        }
+        catch (Exception exception)
+        {
+            LogError(workItem.RoundId, "TIMER_EXTENSION_RETRY_SCHEDULE_FAILED", exception);
+            pendingNativeWaveCompletions.Remove(workItem);
+            workItem.Record.TryMarkTimerExtensionProcessed();
+            LogTimerExtensionSkipped(
+                workItem.RoundId,
+                workItem.Record.WaveId,
+                workItem.CompletedWave.SpawnableFaction.ToString(),
+                workItem.Record.ActualSpawnedCount,
+                "RetrySchedulingFailed",
+                workItem.VanillaResetConfirmed);
+            PublishMajorWaveCompleted(workItem.Record);
+        }
+    }
+
+    private bool ApplyPrimaryWaveTimerExtension(TimerExtensionWorkItem workItem)
+    {
+        string waveFaction = workItem.CompletedWave.SpawnableFaction.ToString();
+        bool isMiniWave = workItem.CompletedWave.IsMiniWave;
+        MajorWaveRecord record = workItem.Record;
+        bool alreadyProcessed = record.IsTimerExtensionProcessed;
+        if (!PrimaryWaveTimerExtensionPolicy.ShouldApply(
+                waveFaction,
+                isMiniWave,
+                record.ActualSpawnedCount,
+                true,
+                spawningFactionTimerExtensionSeconds,
+                opposingFactionTimerExtensionSeconds,
+                alreadyProcessed))
+        {
+            string reason = GetTimerExtensionSkipReason(
+                waveFaction,
+                isMiniWave,
+                record.ActualSpawnedCount,
+                alreadyProcessed);
+            LogTimerExtensionSkipped(
+                workItem.RoundId,
+                record.WaveId,
+                waveFaction,
+                record.ActualSpawnedCount,
+                reason);
+            record.TryMarkTimerExtensionProcessed();
+            return true;
+        }
+
+        if (!PrimaryWaveTimerExtensionPolicy.TryGetExtensions(
+                waveFaction,
+                spawningFactionTimerExtensionSeconds,
+                opposingFactionTimerExtensionSeconds,
+                out int foundationExtension,
+                out int chaosExtension)
+            || !TryGetPrimaryTimers(out TimedWave? foundationTimer, out TimedWave? chaosTimer))
+        {
+            throw new InvalidOperationException("Primary wave timers are unavailable after the native wave event.");
+        }
+
+        TimedWave foundationTimerValue = foundationTimer
+            ?? throw new InvalidOperationException("Foundation primary wave timer is unavailable.");
+        TimedWave chaosTimerValue = chaosTimer
+            ?? throw new InvalidOperationException("Chaos primary wave timer is unavailable.");
+
+        if (record.IsTimerExtensionProcessed)
+        {
+            LogTimerExtensionSkipped(
+                workItem.RoundId,
+                record.WaveId,
+                waveFaction,
+                record.ActualSpawnedCount,
+                "Duplicate");
+            return true;
+        }
+
+        if (!workItem.FoundationTimerAfterVanillaReset.HasValue)
+        {
+            workItem.FoundationTimerAfterVanillaReset = foundationTimerValue.Timer.TimeLeft.TotalSeconds;
+            workItem.ChaosTimerAfterVanillaReset = chaosTimerValue.Timer.TimeLeft.TotalSeconds;
+            workItem.FoundationTimePassedAfterVanillaReset = foundationTimerValue.Timer.Base.TimePassed;
+            workItem.ChaosTimePassedAfterVanillaReset = chaosTimerValue.Timer.Base.TimePassed;
+        }
+
+        double foundationBeforeExtension = foundationTimerValue.Timer.TimeLeft.TotalSeconds;
+        double chaosBeforeExtension = chaosTimerValue.Timer.TimeLeft.TotalSeconds;
+        if (foundationExtension <= 0)
+        {
+            workItem.FoundationExtensionApplied = true;
+        }
+
+        if (chaosExtension <= 0)
+        {
+            workItem.ChaosExtensionApplied = true;
+        }
+
+        if (foundationExtension > 0 && !workItem.FoundationExtensionApplied)
+        {
+            AddTimerExtension(foundationTimerValue, foundationExtension);
+            workItem.FoundationExtensionApplied = true;
+            TrySendTimerUpdate(workItem.RoundId, foundationTimerValue);
+        }
+
+        if (chaosExtension > 0 && !workItem.ChaosExtensionApplied)
+        {
+            AddTimerExtension(chaosTimerValue, chaosExtension);
+            workItem.ChaosExtensionApplied = true;
+            TrySendTimerUpdate(workItem.RoundId, chaosTimerValue);
+        }
+
+        if (!record.TryMarkTimerExtensionProcessed())
+        {
+            LogTimerExtensionSkipped(
+                workItem.RoundId,
+                record.WaveId,
+                waveFaction,
+                record.ActualSpawnedCount,
+                "Duplicate");
+            return true;
+        }
+
+        DateTime appliedAt = DateTime.UtcNow;
+        double foundationAfterExtension = foundationTimerValue.Timer.TimeLeft.TotalSeconds;
+        double chaosAfterExtension = chaosTimerValue.Timer.TimeLeft.TotalSeconds;
+        double delayAfterWaveCompletionMs = Math.Max(0, (appliedAt - record.CompletedAt).TotalMilliseconds);
+        LogInfo(
+            workItem.RoundId,
+            "TimerExtension",
+            $"WaveId={record.WaveId}; WaveFaction={waveFaction}; ActualSpawnedCount={record.ActualSpawnedCount}; VanillaResetDetected={workItem.VanillaResetConfirmed}; VanillaResetDetection=WaveManager.OnWaveSpawnedAfterTimeBasedWave; FoundationTimerBeforeWave={FormatOptionalTimerSeconds(workItem.FoundationTimerBeforeWave)}; ChaosTimerBeforeWave={FormatOptionalTimerSeconds(workItem.ChaosTimerBeforeWave)}; FoundationTimerAfterVanillaReset={FormatOptionalTimerSeconds(workItem.FoundationTimerAfterVanillaReset)}; ChaosTimerAfterVanillaReset={FormatOptionalTimerSeconds(workItem.ChaosTimerAfterVanillaReset)}; FoundationTimerBeforeExtension={FormatTimerSeconds(foundationBeforeExtension)}; ChaosTimerBeforeExtension={FormatTimerSeconds(chaosBeforeExtension)}; FoundationTimePassedAfterVanillaReset={FormatOptionalTimerSeconds(workItem.FoundationTimePassedAfterVanillaReset)}; ChaosTimePassedAfterVanillaReset={FormatOptionalTimerSeconds(workItem.ChaosTimePassedAfterVanillaReset)}; FoundationExtension={foundationExtension}; ChaosExtension={chaosExtension}; FoundationTimerAfterExtension={FormatTimerSeconds(foundationAfterExtension)}; ChaosTimerAfterExtension={FormatTimerSeconds(chaosAfterExtension)}; AppliedAt={appliedAt:O}; WaveCompletedAt={record.CompletedAt:O}; DelayAfterWaveCompletionMs={delayAfterWaveCompletionMs.ToString("0.###", CultureInfo.InvariantCulture)}; RetryCount={workItem.RetryCount}; Applied=true; Reason=PrimaryWaveCompleted");
+        return true;
+    }
+
+    private static bool TryGetPrimaryTimers(out TimedWave? foundationTimer, out TimedWave? chaosTimer)
+    {
+        foundationTimer = null;
+        chaosTimer = null;
+        foreach (TimedWave timedWave in TimedWave.GetTimedWaves())
+        {
+            if (timedWave.IsMiniWave)
+            {
+                continue;
+            }
+
+            if (timedWave.SpawnableFaction == SpawnableFaction.NtfWave)
+            {
+                foundationTimer = timedWave;
+            }
+            else if (timedWave.SpawnableFaction == SpawnableFaction.ChaosWave)
+            {
+                chaosTimer = timedWave;
+            }
+        }
+
+        return foundationTimer is not null && chaosTimer is not null;
+    }
+
+    private static void CapturePendingTimerSnapshot(ReinforcementState reinforcementState)
+    {
+        if (!TryGetPrimaryTimers(out TimedWave? foundationTimer, out TimedWave? chaosTimer))
+        {
+            reinforcementState.PendingFoundationTimerBeforeWave = null;
+            reinforcementState.PendingChaosTimerBeforeWave = null;
+            return;
+        }
+
+        reinforcementState.PendingFoundationTimerBeforeWave = foundationTimer!.Timer.TimeLeft.TotalSeconds;
+        reinforcementState.PendingChaosTimerBeforeWave = chaosTimer!.Timer.TimeLeft.TotalSeconds;
+    }
+
+    private bool ShouldConfirmVanillaReset(string waveFaction, bool isMiniWave, int actualSpawnedCount)
+    {
+        return PrimaryWaveTimerExtensionPolicy.IsPrimaryFaction(waveFaction)
+            && !isMiniWave
+            && actualSpawnedCount > 0
+            && (spawningFactionTimerExtensionSeconds > 0 || opposingFactionTimerExtensionSeconds > 0);
+    }
+
+    private static bool IsVanillaResetDetected(
+        string waveFaction,
+        TimedWave foundationTimer,
+        TimedWave chaosTimer)
+    {
+        TimedWave spawningTimer = string.Equals(waveFaction, "NtfWave", StringComparison.Ordinal)
+            ? foundationTimer
+            : chaosTimer;
+        return PrimaryWaveTimerExtensionPolicy.IsVanillaResetDetected(
+            spawningTimer.Timer.Base.TimePassed);
+    }
+
+    private static void AddTimerExtension(TimedWave timedWave, int extensionSeconds)
+    {
+        Respawning.Waves.WaveTimer timer = timedWave.Timer.Base;
+        timer.SpawnIntervalSeconds += extensionSeconds;
+    }
+
+    private void TrySendTimerUpdate(long roundId, TimedWave timedWave)
+    {
+        try
+        {
+            WaveUpdateMessage.ServerSendUpdate(timedWave.Base, UpdateMessageFlags.Timer);
+        }
+        catch (Exception exception)
+        {
+            LogWarn(
+                roundId,
+                "TimerExtensionUpdateFailed",
+                $"Faction={timedWave.SpawnableFaction}; Reason=TimerValueAppliedButClientUpdateFailed; Exception={exception.GetType().Name}");
+        }
+    }
+
+    private string GetTimerExtensionSkipReason(
+        string waveFaction,
+        bool isMiniWave,
+        int actualSpawnedCount,
+        bool alreadyProcessed)
+    {
+        if (alreadyProcessed)
+        {
+            return "Duplicate";
+        }
+
+        if (spawningFactionTimerExtensionSeconds == 0 && opposingFactionTimerExtensionSeconds == 0)
+        {
+            return "Disabled";
+        }
+
+        if (isMiniWave)
+        {
+            return "MiniWave";
+        }
+
+        if (actualSpawnedCount <= 0)
+        {
+            return "ZeroSpawn";
+        }
+
+        if (!PrimaryWaveTimerExtensionPolicy.IsPrimaryFaction(waveFaction))
+        {
+            return "NotPrimaryWave";
+        }
+
+        return "Incomplete";
+    }
+
+    private void LogTimerExtensionSkipped(
+        long roundId,
+        string waveId,
+        string waveFaction,
+        int actualSpawnedCount,
+        string reason,
+        bool vanillaResetDetected = false)
+    {
+        LogInfo(
+            roundId,
+            "TimerExtension",
+            $"WaveId={waveId}; WaveFaction={waveFaction}; ActualSpawnedCount={actualSpawnedCount}; VanillaResetDetected={vanillaResetDetected}; SpawningFactionExtensionSeconds={spawningFactionTimerExtensionSeconds}; OpposingFactionExtensionSeconds={opposingFactionTimerExtensionSeconds}; FoundationTimerBeforeWave=Unavailable; ChaosTimerBeforeWave=Unavailable; FoundationTimerAfterVanillaReset=Unavailable; ChaosTimerAfterVanillaReset=Unavailable; FoundationTimerBeforeExtension=Unavailable; ChaosTimerBeforeExtension=Unavailable; FoundationExtension=Unavailable; ChaosExtension=Unavailable; FoundationTimerAfterExtension=Unavailable; ChaosTimerAfterExtension=Unavailable; Applied=false; Reason={reason}");
+    }
+
+    private static string FormatTimerSeconds(double seconds)
+    {
+        return seconds.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatOptionalTimerSeconds(double? seconds)
+    {
+        return seconds.HasValue
+            ? FormatTimerSeconds(seconds.Value)
+            : "Unavailable";
+    }
+
+    private void ScheduleSurvivalObservation(long roundId, MajorWaveRecord record)
+    {
+        if (!IsActiveRound(roundId))
         {
             return;
         }
 
         CoroutineHandle handle = default(CoroutineHandle);
         handle = Timing.CallDelayed(
-            Math.Max(0.1f, delay),
-            () => RunFirstWaveMonitor(roundId, handle));
-        state.ScheduledHandles.Add(handle);
+            SurvivalObservationDelaySeconds,
+            () => RunSurvivalObservation(roundId, record, handle));
+        state!.ScheduledHandles.Add(handle);
     }
 
-    private void ScheduleMajorWaveEvaluation(long roundId, MajorWaveRecord record)
-    {
-        if (state is null || !state.IsActive || state.RoundId != roundId || record.IsEvaluationComplete)
-        {
-            return;
-        }
-
-        CoroutineHandle handle = default(CoroutineHandle);
-        handle = Timing.CallDelayed(
-            MajorWaveEvaluationDelaySeconds,
-            () => RunMajorWaveEvaluation(roundId, record, handle));
-        state.ScheduledHandles.Add(handle);
-    }
-
-    private void RunFirstWaveMonitor(long roundId, CoroutineHandle handle)
+    private void RunSurvivalObservation(long roundId, MajorWaveRecord record, CoroutineHandle handle)
     {
         try
         {
-            MonitorFirstWave(roundId);
-        }
-        finally
-        {
-            RemoveScheduledHandle(roundId, handle);
-        }
-    }
+            if (!IsActiveRound(roundId))
+            {
+                return;
+            }
 
-    private void RunMajorWaveEvaluation(long roundId, MajorWaveRecord record, CoroutineHandle handle)
-    {
-        try
-        {
-            EvaluateMajorWave(roundId, record);
+            int survivingCount = record.MemberIds
+                .Select(Player.Get)
+                .Count(IsAlivePrimaryWaveMember);
+            if (!record.TryCompleteSurvivalObservation(survivingCount, DateTime.UtcNow))
+            {
+                return;
+            }
+
+            LogInfo(
+                roundId,
+                "PrimaryWaveSurvivalObserved",
+                $"WaveId={record.WaveId}; ActualSpawnedCount={record.ActualSpawnedCount}; SurvivingCount={record.SurvivingCountAtObservation}; ObservedAt={record.SurvivalObservedAt:O}; DlrcJudgment=DeferredToModule03");
         }
         finally
         {
@@ -685,477 +827,25 @@ public sealed class ReinforcementManager
 
     private void RemoveScheduledHandle(long roundId, CoroutineHandle handle)
     {
-        if (state is null || !state.IsActive || state.RoundId != roundId)
+        if (IsActiveRound(roundId))
         {
-            return;
-        }
-
-        state.ScheduledHandles.Remove(handle);
-    }
-
-    private void ClearPendingWaveState()
-    {
-        if (state is null)
-        {
-            return;
-        }
-
-        state.PendingWaveFaction = null;
-        state.PendingWaveIsMini = false;
-        state.PendingWavePlayerCount = 0;
-        state.PendingWavePlayerIds.Clear();
-    }
-
-    private void EvaluateMajorWave(long roundId, MajorWaveRecord record)
-    {
-        if (state is null || !state.IsActive || state.RoundId != roundId || !state.MajorWaveHistory.Contains(record) || record.IsEvaluationComplete)
-        {
-            return;
-        }
-
-        int survivingCount = record.MemberIds
-            .Select(playerId => Player.Get(playerId))
-            .Count(IsEligibleMajorWaveSurvivor);
-        CompleteMajorWave(record, survivingCount, "Timed120Seconds");
-    }
-
-    private void CompleteMajorWave(MajorWaveRecord record, int survivingCount, string reason)
-    {
-        if (state is null || !state.IsActive || record.IsEvaluationComplete)
-        {
-            return;
-        }
-
-        int normalizedSurvivingCount = Math.Max(0, Math.Min(record.StartingCount, survivingCount));
-        record.SurvivingCountAtEvaluation = normalizedSurvivingCount;
-        record.BaseFailureScore = GetMajorWaveFailureScore(record.StartingCount, normalizedSurvivingCount);
-        record.IsCatastrophic = normalizedSurvivingCount == 0;
-        record.IsEvaluationComplete = true;
-        record.EvaluatedAt = DateTime.UtcNow;
-        record.EvaluationReason = reason;
-
-        string action = reason == "EarlyTotalWipe" ? "MajorWaveEarlyWipe" : "MajorWaveEvaluation";
-        LogInfo(
-            state.RoundId,
-            action,
-            $"Wave={record.Name}; StartingCount={record.StartingCount}; SurvivingCount={record.SurvivingCountAtEvaluation}; BaseFailureScore={record.BaseFailureScore:0.####}; IsCatastrophic={record.IsCatastrophic}; Reason={record.EvaluationReason}");
-    }
-
-    private static bool IsEligibleMajorWaveSurvivor(Player? player)
-    {
-        return player is not null
-            && player.IsConnected
-            && player.IsAlive
-            && player.Role.Type != RoleTypeId.Spectator
-            && !player.IsOverwatchEnabled;
-    }
-
-    private static double GetMajorWaveFailureScore(int startingCount, int survivingCount)
-    {
-        if (survivingCount <= 0)
-        {
-            return 15d;
-        }
-
-        if (startingCount <= 0)
-        {
-            return 0d;
-        }
-
-        double survivalRatio = survivingCount / (double)startingCount;
-        if (survivalRatio > 0.75d)
-        {
-            return 0d;
-        }
-
-        if (survivalRatio > 0.50d)
-        {
-            return 4d;
-        }
-
-        if (survivalRatio > 0.25d)
-        {
-            return 8d;
-        }
-
-        return 12d;
-    }
-
-    private void MonitorFirstWave(long roundId)
-    {
-        if (state is null || !state.IsActive || state.RoundId != roundId)
-        {
-            return;
-        }
-
-        float elapsed = GetElapsedSeconds();
-        RefreshFirstWaveWindowState(elapsed);
-
-        if (!state.PluginWaveRequestPending
-            && !state.PluginWaveInProgress
-            && WaveControlPolicy.IsDue(elapsed, state.NextNormalWaveDueSeconds)
-            && !Respawn.IsSpawning)
-        {
-            List<Player> eligibleObservers = GetEligibleObservers();
-            if (eligibleObservers.Count > 0)
-            {
-                RequestDueWave(elapsed, eligibleObservers.Count);
-            }
-            else if (state.FirstWaveState is FirstWaveState.Completed or FirstWaveState.Skipped)
-            {
-                SkipElapsedWaveWindows(elapsed);
-            }
-        }
-
-        ScheduleFirstWaveMonitor(roundId, 1f);
-    }
-
-    private void RequestDueWave(float elapsed, int eligibleObserverCount)
-    {
-        if (state is null)
-        {
-            return;
-        }
-
-        bool isFirstWave = state.FirstWaveState is FirstWaveState.NotReady or FirstWaveState.WaitingForObservers;
-        string selectionReason;
-        SpawnableFaction selectedFaction = SelectFactionBySupportRatio(out selectionReason);
-
-        state.RequestedWaveFaction = selectedFaction;
-        state.PluginWaveRequestPending = true;
-        if (isFirstWave)
-        {
-            state.FirstWaveFaction = selectedFaction;
-            state.HasFirstWaveFaction = true;
-            state.FirstWaveState = FirstWaveState.Requested;
-        }
-
-        LogInfo(
-            state.RoundId,
-            isFirstWave ? "FirstWaveTimerTriggered" : "WaveTimerTriggered",
-            $"Elapsed={FormatSeconds(elapsed)}; Due={FormatSeconds(state.NextNormalWaveDueSeconds)}; EligibleObservers={eligibleObserverCount}; SelectedFaction={selectedFaction}; Reason={selectionReason}; TicketsPreserved=true");
-
-        try
-        {
-            Respawn.ForceWave(selectedFaction);
-        }
-        catch (Exception exception)
-        {
-            state.PluginWaveRequestPending = false;
-            state.RequestedWaveFaction = null;
-            state.FirstWaveState = isFirstWave ? FirstWaveState.WaitingForObservers : state.FirstWaveState;
-            state.HasFirstWaveFaction = false;
-            state.FirstWaveFaction = SpawnableFaction.None;
-            LogError(state.RoundId, "WaveForceFailed", exception, $"Elapsed={FormatSeconds(elapsed)}; Faction={selectedFaction}");
+            state!.ScheduledHandles.Remove(handle);
         }
     }
 
-    private void RefreshFirstWaveWindowState(float elapsed)
+    private PrimaryWaveCaps GetCaps()
     {
-        if (state is null)
-        {
-            return;
-        }
-
-        float firstWindow = GetFirstWindowSeconds();
-        float deadline = GetDeadlineSeconds(firstWindow);
-
-        if (state.FirstWaveState == FirstWaveState.NotReady && elapsed >= firstWindow)
-        {
-            state.FirstWaveState = FirstWaveState.WaitingForObservers;
-            int observerCount = GetEligibleObservers().Count;
-
-            LogInfo(
-                state.RoundId,
-                "FirstWaveWindowOpened",
-                $"RoundTime={FormatSeconds(elapsed)}; Spectators={observerCount}; Deadline={FormatSeconds(deadline)}; Decision=WAIT_FOR_NATIVE_NORMAL_WAVE; ForceWave=false");
-        }
-
-        bool isFirstWavePending = state.FirstWaveState is FirstWaveState.NotReady
-            or FirstWaveState.WaitingForObservers
-            or FirstWaveState.Requested;
-        int observerCountAtDeadline = GetEligibleObservers().Count;
-        if (!state.PluginWaveRequestPending
-            && !state.PluginWaveInProgress
-            && FirstWavePolicy.ShouldSkip(
-                isFirstWavePending,
-                elapsed,
-                deadline,
-                observerCountAtDeadline))
-        {
-            state.FirstWaveState = FirstWaveState.Skipped;
-            state.FirstWaveRespawnStarted = false;
-            state.FirstWaveSelectionHandled = false;
-            state.HasFirstWaveFaction = false;
-            state.FirstWaveFaction = SpawnableFaction.None;
-            state.NextNormalWaveDueSeconds = FirstWavePolicy.GetNextNormalWaveDueAfterSkip(
-                firstWindow,
-                GetNormalIntervalSeconds());
-            ClearPendingWaveState();
-            LogWarn(
-                state.RoundId,
-                "FirstWaveDeadlineReached",
-                $"RoundTime={FormatSeconds(elapsed)}; Spectators=0; Decision=SKIP_FIRST_WAVE; Reason=NoEligibleSpectators; NextNormalWaveDue={FormatSeconds(state.NextNormalWaveDueSeconds)}");
-        }
+        return config.PrimaryWaveCaps ?? new PrimaryWaveCaps();
     }
 
-    private void SkipElapsedWaveWindows(float elapsed)
+    private bool IsActive()
     {
-        if (state is null)
-        {
-            return;
-        }
-
-        float previousDue = state.NextNormalWaveDueSeconds;
-        int skippedWindows = 0;
-        do
-        {
-            state.NextNormalWaveDueSeconds = FirstWavePolicy.GetNextFixedWaveDue(
-                state.NextNormalWaveDueSeconds,
-                GetNormalIntervalSeconds());
-            skippedWindows++;
-        }
-        while (WaveControlPolicy.IsDue(elapsed, state.NextNormalWaveDueSeconds));
-
-        LogInfo(
-            state.RoundId,
-            "WaveWindowSkipped",
-            $"Elapsed={FormatSeconds(elapsed)}; PreviousDue={FormatSeconds(previousDue)}; SkippedWindows={skippedWindows}; NextNormalWaveDue={FormatSeconds(state.NextNormalWaveDueSeconds)}; Reason=NoEligibleObservers; TicketsPreserved=true");
+        return state is not null && state.IsActive;
     }
 
-    private void AddSupportScore(SupportFaction faction, int score)
+    private bool IsActiveRound(long roundId)
     {
-        if (state is null || score <= 0)
-        {
-            return;
-        }
-
-        if (faction == SupportFaction.Foundation)
-        {
-            state.FoundationSupportScore += score;
-        }
-        else if (faction == SupportFaction.Chaos)
-        {
-            state.ChaosSupportScore += score;
-        }
-    }
-
-    private void PauseNativeWaves(long roundId)
-    {
-        try
-        {
-            Respawn.PauseWaves();
-            nativeWavesPaused = true;
-            LogInfo(roundId, "NativeWavesPaused", "原版正常/mini wave 计时器已暂停；RA 正常大波保留，mini wave 仍禁止。");
-        }
-        catch (Exception exception)
-        {
-            nativeWavesPaused = false;
-            LogError(roundId, "NativeWavesPauseFailed", exception);
-        }
-    }
-
-    private void ResumeNativeWaves(long roundId)
-    {
-        if (!nativeWavesPaused)
-        {
-            return;
-        }
-
-        try
-        {
-            Respawn.ResumeWaves();
-            LogInfo(roundId, "NativeWavesResumed", "插件回合状态清理，原版 Respawn Waves 计时器已恢复。");
-        }
-        catch (Exception exception)
-        {
-            LogError(roundId, "NativeWavesResumeFailed", exception);
-        }
-        finally
-        {
-            nativeWavesPaused = false;
-        }
-    }
-
-    private static SupportFaction ResolveSupportFaction(Player? player)
-    {
-        if (player is null)
-        {
-            return SupportFaction.None;
-        }
-
-        if (player.IsFoundationForces)
-        {
-            return SupportFaction.Foundation;
-        }
-
-        if (player.IsCHI)
-        {
-            return SupportFaction.Chaos;
-        }
-
-        return SupportFaction.None;
-    }
-
-    private static bool IsMainScpRole(RoleTypeId role)
-    {
-        return role == RoleTypeId.Scp049
-            || role == RoleTypeId.Scp079
-            || role == RoleTypeId.Scp096
-            || role == RoleTypeId.Scp106
-            || role == RoleTypeId.Scp173
-            || role == RoleTypeId.Scp3114
-            || role == RoleTypeId.Scp939;
-    }
-
-    private static SupportItemKind ResolveSupportItemKind(ItemType itemType)
-    {
-        string itemName = itemType.ToString();
-        if (!itemName.StartsWith("SCP", StringComparison.OrdinalIgnoreCase))
-        {
-            return SupportItemKind.None;
-        }
-
-        return itemType == ItemType.SCP207
-            || itemType == ItemType.SCP330
-            || itemType == ItemType.SCP500
-            ? SupportItemKind.ConsumableScp
-            : SupportItemKind.UniqueScp;
-    }
-
-    private SpawnableFaction SelectFactionBySupportRatio(out string reason)
-    {
-        if (state is null)
-        {
-            reason = "NoState";
-            return SpawnableFaction.NtfWave;
-        }
-
-        int foundationScore = Math.Max(0, state.FoundationSupportScore);
-        int chaosScore = Math.Max(0, state.ChaosSupportScore);
-        int total = foundationScore + chaosScore;
-
-        if (total == 0)
-        {
-            double roll = random.NextDouble();
-            SpawnableFaction selected = roll < 0.5d ? SpawnableFaction.NtfWave : SpawnableFaction.ChaosWave;
-            reason = $"SupportRatio; FoundationProbability=0.5000; ChaosProbability=0.5000; RandomRoll={roll:0.0000}; SelectedFaction={selected}";
-            return selected;
-        }
-
-        double foundationProbability = foundationScore / (double)total;
-        double chaosProbability = chaosScore / (double)total;
-        double ratioRoll = random.NextDouble();
-        SpawnableFaction faction = ratioRoll < foundationProbability ? SpawnableFaction.NtfWave : SpawnableFaction.ChaosWave;
-        reason = $"SupportRatio; FoundationProbability={foundationProbability:0.0000}; ChaosProbability={chaosProbability:0.0000}; RandomRoll={ratioRoll:0.0000}; SelectedFaction={faction}";
-        return faction;
-    }
-
-    private void ApplyScoreCarryover()
-    {
-        if (state is null)
-        {
-            return;
-        }
-
-        double ratio = GetCarryoverRatio();
-        int foundationBefore = state.FoundationSupportScore;
-        int chaosBefore = state.ChaosSupportScore;
-        int foundationAfter = RoundScore(foundationBefore * ratio);
-        int chaosAfter = RoundScore(chaosBefore * ratio);
-
-        state.FoundationSupportScore = foundationAfter;
-        state.ChaosSupportScore = chaosAfter;
-
-        LogInfo(
-            state.RoundId,
-            "DecaySupportScores",
-            $"Reason=SupportCycleCompleted; CarryoverRatio={ratio:0.####}; FoundationBefore={foundationBefore}; FoundationCalculation={foundationBefore}*{ratio:0.####}={foundationBefore * ratio:0.####}; FoundationAfter={foundationAfter}; ChaosBefore={chaosBefore}; ChaosCalculation={chaosBefore}*{ratio:0.####}={chaosBefore * ratio:0.####}; ChaosAfter={chaosAfter}");
-    }
-
-    private double GetCarryoverRatio()
-    {
-        return Math.Max(0d, Math.Min(1d, config.SupportScoreCarryoverRatio));
-    }
-
-    private float GetFirstWindowSeconds()
-    {
-        return Math.Max(0f, config.FirstReinforcementTimeSeconds);
-    }
-
-    private float GetDeadlineSeconds(float firstWindow)
-    {
-        return Math.Max(firstWindow, config.FirstReinforcementDeadlineSeconds);
-    }
-
-    private float GetNormalIntervalSeconds()
-    {
-        return Math.Max(1f, config.NormalReinforcementIntervalSeconds);
-    }
-
-    private float GetElapsedSeconds()
-    {
-        return (float)Round.ElapsedTime.TotalSeconds;
-    }
-
-    private static List<Player> GetEligibleObservers()
-    {
-        return Player.Enumerable
-            .Where(IsEligibleObserver)
-            .ToList();
-    }
-
-    private static bool IsEligibleObserver(Player player)
-    {
-        RoleTypeId role = player.Role.Type;
-        return WaveControlPolicy.IsEligibleObserver(
-            player.IsConnected,
-            player.IsOverwatchEnabled,
-            role == RoleTypeId.Spectator,
-            role == RoleTypeId.None);
-    }
-
-    private bool TryResolveEscapeCredit(
-        EscapeScenario scenario,
-        out bool foundationCredit,
-        out int scoreValue,
-        out string reason)
-    {
-        foundationCredit = false;
-        scoreValue = 0;
-        reason = string.Empty;
-
-        switch (scenario)
-        {
-            case EscapeScenario.ClassD:
-                foundationCredit = false;
-                scoreValue = Math.Max(0, config.ClassDSupportScore);
-                reason = "ClassDNormalEscape";
-                return true;
-            case EscapeScenario.CuffedClassD:
-                foundationCredit = true;
-                scoreValue = Math.Max(0, config.ClassDSupportScore);
-                reason = "ClassDCuffedEscape";
-                return true;
-            case EscapeScenario.Scientist:
-                foundationCredit = true;
-                scoreValue = Math.Max(0, config.ScientistSupportScore);
-                reason = "ScientistNormalEscape";
-                return true;
-            case EscapeScenario.CuffedScientist:
-                foundationCredit = false;
-                scoreValue = Math.Max(0, config.ScientistSupportScore);
-                reason = "ScientistCuffedEscape";
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private static TimedWave? FindTimedWave(SpawnableFaction faction, bool isMiniWave)
-    {
-        return TimedWave.GetTimedWaves()
-            .FirstOrDefault(wave => wave.SpawnableFaction == faction && wave.IsMiniWave == isMiniWave);
+        return IsActive() && state!.RoundId == roundId;
     }
 
     private static TimedWave? FindTimedWave(SpawnableWaveBase wave)
@@ -1164,21 +854,41 @@ public sealed class ReinforcementManager
             .FirstOrDefault(candidate => ReferenceEquals(candidate.Base, wave));
     }
 
-    private static SpawnableFaction ResolveFaction(SpawnableWaveBase wave, SpawnableFaction fallback)
+    private static List<Player> GetActuallySpawnedPlayers(
+        IReadOnlyList<Player> candidates,
+        TimedWave? wave)
     {
-        TimedWave? timedWave = FindTimedWave(wave);
-        return timedWave?.SpawnableFaction ?? fallback;
+        List<Player> spawnedPlayers = new List<Player>();
+        foreach (Player player in candidates)
+        {
+            bool matchesTargetTeam = wave is null || player.Role.Team == wave.Team;
+            if (PrimaryWaveTimerExtensionPolicy.IsActualSpawnedPlayer(
+                    player.IsConnected,
+                    player.IsAlive,
+                    matchesTargetTeam))
+            {
+                spawnedPlayers.Add(player);
+            }
+        }
+
+        return spawnedPlayers;
     }
 
-    private static int RoundScore(double score)
+    private static bool IsAlivePrimaryWaveMember(Player? player)
     {
-        return (int)Math.Round(score, MidpointRounding.AwayFromZero);
+        return player is not null
+            && player.IsConnected
+            && player.IsAlive
+            && player.Role.Type != RoleTypeId.Spectator
+            && !player.IsOverwatchEnabled;
     }
 
-    private static string FormatSeconds(float seconds)
+    private void LogDetailed(long roundId, string action, string message)
     {
-        TimeSpan time = TimeSpan.FromSeconds(Math.Max(0f, seconds));
-        return $"{(int)time.TotalMinutes:00}:{time.Seconds:00}";
+        if (config.Debug)
+        {
+            Log.Debug($"[EmergencyEvents][Reinforcement][{DateTime.UtcNow:O}][RoundId={roundId}][{action}] {message}");
+        }
     }
 
     private static void LogInfo(long roundId, string action, string message)
@@ -1191,18 +901,8 @@ public sealed class ReinforcementManager
         Log.Warn($"[EmergencyEvents][Reinforcement][{DateTime.UtcNow:O}][RoundId={roundId}][{action}] {message}");
     }
 
-    private void LogDebug(long roundId, string action, string message)
+    private static void LogError(long roundId, string action, Exception exception)
     {
-        if (!config.Debug)
-        {
-            return;
-        }
-
-        Log.Debug($"[EmergencyEvents][Reinforcement][{DateTime.UtcNow:O}][RoundId={roundId}][{action}] {message}");
-    }
-
-    private static void LogError(long roundId, string action, Exception exception, string? message = null)
-    {
-        Log.Error($"[EmergencyEvents][Reinforcement][{DateTime.UtcNow:O}][RoundId={roundId}][{action}] {message ?? string.Empty} {exception}");
+        Log.Error($"[EmergencyEvents][Reinforcement][{DateTime.UtcNow:O}][RoundId={roundId}][{action}] {exception}");
     }
 }

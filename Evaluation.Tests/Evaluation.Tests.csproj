@@ -13,10 +13,13 @@
     <Compile Include="..\RoundCore\PopulationTier.cs" Link="RoundCore\PopulationTier.cs" />
     <Compile Include="..\RoundCore\BadgeRegistry.cs" Link="RoundCore\BadgeRegistry.cs" />
     <Compile Include="..\RoundCore\RoundRestartResetter.cs" Link="RoundCore\RoundRestartResetter.cs" />
-    <Compile Include="..\Reinforcement\FirstWavePolicy.cs" Link="Reinforcement\FirstWavePolicy.cs" />
-    <Compile Include="..\Reinforcement\WaveControlPolicy.cs" Link="Reinforcement\WaveControlPolicy.cs" />
-    <Compile Include="..\Reinforcement\SupportScoreLedger.cs" Link="Reinforcement\SupportScoreLedger.cs" />
+    <Compile Include="..\Runtime\*.cs" Link="Runtime\%(Filename)%(Extension)" />
+    <Compile Include="..\Reinforcement\PrimaryWavePolicy.cs" Link="Reinforcement\PrimaryWavePolicy.cs" />
+    <Compile Include="..\Reinforcement\PrimaryWaveTimerExtensionPolicy.cs" Link="Reinforcement\PrimaryWaveTimerExtensionPolicy.cs" />
+    <Compile Include="..\Reinforcement\MajorWaveHistory.cs" Link="Reinforcement\MajorWaveHistory.cs" />
     <Compile Include="..\RoundCore\ScpRolePolicy.cs" Link="RoundCore\ScpRolePolicy.cs" />
+    <Compile Include="..\Crisis\**\*.cs" Link="Crisis\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\RemoteAdminCommands\*.cs" Exclude="..\RemoteAdminCommands\EmergencyEventsCommand.cs" Link="RemoteAdminCommands\%(Filename)%(Extension)" />
     <Compile Include="..\Evaluation\*.cs" Exclude="..\Evaluation\SnapshotCollector.cs;..\Evaluation\DlrcEvaluatorService.cs" Link="Evaluation\%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

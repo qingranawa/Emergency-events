@@ -1,14 +1,18 @@
 using System;
 using System.Collections.Generic;
+using EmergencyEvents.Crisis;
+using EmergencyEvents.Crisis.Detectors;
 using EmergencyEvents.Evaluation;
+using EmergencyEvents.RemoteAdminCommands;
 using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RoundCore;
+using EmergencyEvents.Runtime;
 
 namespace EmergencyEvents.Evaluation.Tests;
 
 internal static class Program
 {
-    private static int Main()
+    private static int Main(string[] args)
     {
         (string Name, Action Body)[] tests =
         {
@@ -56,26 +60,72 @@ internal static class Program
             ("异常数值不会污染 Response Score", InvalidHealthCannotPoisonScore),
             ("详细日志包含人工复算所需的分项和原始数据", EvaluationLogContainsEveryRecalculationComponent),
             ("死亡清除 Badge 后不再保留旧玩家映射", BadgeRegistryRemovesBadgeAfterDeath),
-            ("首波截止无人时跳过并保持固定普通波次窗口", FirstWavePolicySkipsAtDeadline),
-            ("固定波次窗口不会随实际刷新时间漂移", FixedWaveWindowsDoNotDrift),
-            ("Support Score 账本覆盖 SCP 死亡和重复保护", SupportScoreLedgerScoresScpDeath),
-            ("Support Score 账本覆盖伤害阈值和治疗后重复保护", SupportScoreLedgerScoresDamageThresholds),
-            ("Support Score 账本覆盖物品实例和 SCP-914 排除", SupportScoreLedgerScoresItemInstances),
             ("高人口 SCP 角色不再强制第二只 SCP-939", ScpRolePolicyUsesOne939),
-            ("插件波次从 05:00 到点且不提前触发", WaveTimerUsesFiveMinuteDueTime),
-            ("只有插件发起的正常大波允许进入刷新管线", WaveGateRejectsNativeAndMiniWaves),
-            ("插件 ForceWave 请求即使跳过选择事件也能进入刷新管线", PluginWaveRequestAllowsRespawnWhenSelectingEventSkipped),
-            ("暂停原版计时器后允许 RA 手动正常大波", ManualWaveUsesPausedNativeTimer),
-            ("晚加入的 None dummy 可以进入观察者候选池", LateDummyIsEligibleObserver),
             ("强制重启按顺序清理全部回合状态", RoundRestartResetsAllRoundState),
+            ("Primary Wave 五档人数上限符合规格", PrimaryWaveCapsMatchSpecification),
+            ("Primary Wave 上限只能截断原版人数", PrimaryWaveCapsNeverExpandVanillaWave),
+            ("Primary Wave 始终使用开局锁定档位", PrimaryWaveUsesLockedPopulationTier),
+            ("仅在配置启用时取消 Mini-Wave", MiniWaveCancellationRespectsConfiguration),
+            ("Mini-Wave 只在刷新边界取消以避免原版重试", MiniWaveCancellationUsesRespawningBoundary),
+            ("Late Join 依旧保留在原版选中的名单内", PrimaryWaveCapPreservesVanillaSelection),
+            ("Major Wave History 轮转、去重与清理正确", MajorWaveHistoryRollsOverDeduplicatesAndCleansUp),
+            ("Primary Wave 按刷新阵营使用 60/15 计时器增量", PrimaryWaveTimerExtensionMapsSpawningAndOpposingTimers),
+            ("Foundation Wave 使用动态原版计时器", FoundationWaveUsesDynamicVanillaTimers),
+            ("Chaos Wave 使用动态原版计时器", ChaosWaveUsesDynamicVanillaTimers),
+            ("原版 Timer Passed 归零才视为 Reset 完成", VanillaResetRequiresFreshTimer),
+            ("Primary Wave Timer Extension 为零时不修改计时器", DisabledPrimaryWaveTimerExtensionDoesNotApply),
+            ("Mini-Wave 不应用 Timer Extension", MiniWaveDoesNotApplyTimerExtension),
+            ("零人 Primary Wave 不应用 Timer Extension", ZeroSpawnPrimaryWaveDoesNotApplyTimerExtension),
+            ("未完成 Primary Wave 不应用 Timer Extension", IncompletePrimaryWaveDoesNotApplyTimerExtension),
+            ("同一波次不得重复应用 Timer Extension", DuplicateWaveDoesNotApplyTimerExtension),
+            ("MTF Primary Wave 被识别为 Timer Extension 目标", NtfPrimaryWaveIsTimerExtensionTarget),
+            ("CI Primary Wave 被识别为 Timer Extension 目标", ChaosPrimaryWaveIsTimerExtensionTarget),
+            ("Timer Extension 不产生第二次 POST_MAJOR_WAVE", TimerExtensionDoesNotDuplicatePostMajorWave),
+            ("非法 Timer Extension 配置回退到安全默认值", InvalidTimerExtensionConfigurationFallsBackSafely),
+            ("刷新方和对方可以独立禁用计时器增量", TimerExtensionSidesCanBeDisabledIndependently),
+            ("Timer Extension 不保存跨波次累计增量", TimerExtensionDoesNotAccumulateAcrossWaves),
+            ("特殊人员事件不应用 Timer Extension", SpecialPersonnelEventDoesNotApplyTimerExtension),
+            ("Evaluator 忙碌时只保留一个补算队列项", BusyEvaluatorCoalescesPostMajorWaveQueue),
+            ("原版候选只有成功出生玩家才计入实际人数", ActualSpawnedPlayerRequiresSuccessfulNativeRole),
+            ("Module 04 发布危机公共契约", CrisisContractsArePublished),
+            ("Module 04 发布四个无状态危机判定器", StatelessCrisisDetectorsArePublished),
+            ("BIO 使用各档默认僵尸阈值且不依赖 049 本体", BioUsesTierAwareZombieThresholds),
+            ("SYS 与 SEC 只按其自身事实判定", StatelessDetectorsUseOwnFacts),
+            ("SEC 覆盖全部人口档位且保留 E 档特殊 L3", SecurityUsesTierAwareThresholds),
+            ("CON、END 与地表事实快照契约已发布", StatefulCrisisContractsArePublished),
+            ("CON 跟随第二个实际大波并按五分钟检查升级", ContainmentUsesSecondMajorWaveCheckpoints),
+            ("CON 的首个检查点从实际大波完成时刻起算", ContainmentUsesActualWaveCompletionTime),
+            ("END 仅在核爆后连续地表僵持时升级", EndgameRequiresContinuousSurfaceStalemate),
+            ("GOI 只使用未来注册钩子与基金会劣势条件", GoiRequiresRegisteredHostileThirdParty),
+            ("CrisisManager 与 Module03 完成事件契约已发布", CrisisManagerContractsArePublished),
+            ("CrisisManager 固定排序且保持 Global D-LRC 独立", CrisisManagerBuildsStableAssessment),
+            ("RA 命令语法精确识别 D-LRC 子命令", EmergencyEventsCommandSyntaxRecognizesDlrcEvaluate),
+            ("RA 状态报告包含人口、响应、危机与积分", DlrcStateReportContainsRequiredFacts),
+            ("低人口暂停在本回合不可逆并在下一局重新判定", LowPopulationSuspensionIsRoundLocked),
+            ("管理员启停不会在进行中的回合重跑 Round Core", EnableDisableDefersRoundActivation),
+            ("RA 根命令树精确识别支持的诊断和测试请求", EmergencyEventsCommandSyntaxRecognizesCommandTree),
         };
 
-        int total = tests.Length;
+        string requestedModule = args.Length == 0 ? "ALL" : args[0].ToUpperInvariant();
+        int total = 0;
         int failed = 0;
 
-        foreach ((string name, Action body) in tests)
+        for (int index = 0; index < tests.Length; index++)
         {
-            failed += RunTest(name, body);
+            string module = index < 43 ? "M03" : index < 46 ? "M01" : index < 71 ? "M02" : "M04";
+            if (requestedModule != "ALL" && requestedModule != module)
+            {
+                continue;
+            }
+
+            total++;
+            failed += RunTest(module, tests[index].Name, tests[index].Body);
+        }
+
+        if (total == 0)
+        {
+            Console.WriteLine($"Unknown module: {requestedModule}");
+            return 2;
         }
 
         Console.WriteLine($"Total: {total}");
@@ -83,19 +133,480 @@ internal static class Program
         return failed == 0 ? 0 : 1;
     }
 
-    private static int RunTest(string name, Action body)
+    private static int RunTest(string module, string name, Action body)
     {
         try
         {
             body();
-            Console.WriteLine($"[PASS] {name}");
+            Console.WriteLine($"[PASS][{module}] {name}");
             return 0;
         }
         catch (Exception exception)
         {
-            Console.WriteLine($"[FAIL] {name}: {exception.Message}");
+            Console.WriteLine($"[FAIL][{module}] {name}: {exception.Message}");
             return 1;
         }
+    }
+
+    private static void CrisisContractsArePublished()
+    {
+        Type assemblyType = typeof(DlrcEvaluator);
+        AssertTrue(
+            assemblyType.Assembly.GetType("EmergencyEvents.Crisis.CrisisTag") is not null,
+            "Module 04 必须公开 CrisisTag 契约");
+        AssertTrue(
+            assemblyType.Assembly.GetType("EmergencyEvents.Crisis.CrisisAssessment") is not null,
+            "Module 04 必须公开 CrisisAssessment 契约");
+    }
+
+    private static void StatelessCrisisDetectorsArePublished()
+    {
+        Type assemblyType = typeof(DlrcEvaluator);
+        string[] contractNames =
+        {
+            "EmergencyEvents.Crisis.CrisisOptions",
+            "EmergencyEvents.Crisis.ICrisisDetector",
+            "EmergencyEvents.Crisis.Detectors.BioCrisisDetector",
+            "EmergencyEvents.Crisis.Detectors.SysCrisisDetector",
+            "EmergencyEvents.Crisis.Detectors.SecCrisisDetector",
+            "EmergencyEvents.Crisis.Detectors.GoiCrisisDetector",
+        };
+
+        foreach (string contractName in contractNames)
+        {
+            AssertTrue(
+                assemblyType.Assembly.GetType(contractName) is not null,
+                $"Module 04 必须公开 {contractName} 契约");
+        }
+    }
+
+    private static void BioUsesTierAwareZombieThresholds()
+    {
+        (PopulationTier Tier, int BelowL3, int L3, int L4, int L5)[] cases =
+        {
+            (PopulationTier.E, 2, 3, 5, 7),
+            (PopulationTier.D, 2, 3, 6, 8),
+            (PopulationTier.C, 3, 4, 7, 10),
+            (PopulationTier.B, 3, 4, 8, 12),
+            (PopulationTier.A, 4, 5, 9, 14),
+        };
+        BioCrisisDetector detector = new BioCrisisDetector();
+
+        foreach ((PopulationTier tier, int belowL3, int level3, int level4, int level5) in cases)
+        {
+            AssertEqual(
+                CrisisSeverity.Inactive,
+                Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: belowL3)).Severity,
+                $"{tier} 档 BIO 的 L3 下方不应激活");
+            AssertEqual(
+                CrisisSeverity.Level3,
+                Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: level3)).Severity,
+                $"{tier} 档 BIO 的 L3 边界错误");
+            AssertEqual(
+                CrisisSeverity.Level4,
+                Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: level4)).Severity,
+                $"{tier} 档 BIO 的 L4 边界错误");
+            AssertEqual(
+                CrisisSeverity.Level5,
+                Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: level5)).Severity,
+                $"{tier} 档 BIO 的 L5 边界错误");
+        }
+    }
+
+    private static void StatelessDetectorsUseOwnFacts()
+    {
+        SysCrisisDetector sys = new SysCrisisDetector();
+        AssertEqual(CrisisSeverity.Inactive, Detect(sys, CreateSnapshot(scp079Present: false, scp079Tier: 5)).Severity, "079 不存在时 SYS 必须关闭");
+        AssertEqual(CrisisSeverity.Inactive, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 2)).Severity, "079 Tier2 不得触发 SYS");
+        AssertEqual(CrisisSeverity.Level3, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 3)).Severity, "079 Tier3 必须为 SYS L3");
+        AssertEqual(CrisisSeverity.Level4, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 4)).Severity, "079 Tier4 必须为 SYS L4");
+        AssertEqual(CrisisSeverity.Level5, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 5)).Severity, "079 Tier5 必须为 SYS L5");
+        AssertEqual(CrisisSeverity.Inactive, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 6)).Severity, "非法 079 Tier 不得被误判为 SYS L5");
+
+        SecCrisisDetector sec = new SecCrisisDetector();
+        AssertEqual(CrisisSeverity.Inactive, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 0)).Severity, "没有敌对威胁时 SEC 必须关闭");
+        AssertEqual(CrisisSeverity.Level3, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 2, mainScpAlive: 1)).Severity, "C 档基金会两人且存在 SCP 应为 SEC L3");
+        AssertEqual(CrisisSeverity.Level4, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 1, mainScpAlive: 1)).Severity, "C 档基金会一人且存在 SCP 应为 SEC L4");
+        AssertEqual(CrisisSeverity.Level5, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 0, mainScpAlive: 1)).Severity, "基金会为零且存在 SCP 应为 SEC L5");
+
+    }
+
+    private static void SecurityUsesTierAwareThresholds()
+    {
+        (PopulationTier Tier, int L3Foundation, int L4Foundation)[] cases =
+        {
+            (PopulationTier.E, 1, 1),
+            (PopulationTier.D, 2, 1),
+            (PopulationTier.C, 2, 1),
+            (PopulationTier.B, 4, 2),
+            (PopulationTier.A, 5, 2),
+        };
+        SecCrisisDetector detector = new SecCrisisDetector();
+
+        foreach ((PopulationTier tier, int level3Foundation, int level4Foundation) in cases)
+        {
+            CrisisSeverity expectedAtLevel3 = tier == PopulationTier.E
+                ? CrisisSeverity.Level3
+                : CrisisSeverity.Level3;
+            AssertEqual(
+                expectedAtLevel3,
+                Detect(detector, CreateSnapshot(populationTier: tier, foundationCombatants: level3Foundation, chaosCombatants: 1)).Severity,
+                $"{tier} 档 SEC L3 边界错误");
+            if (tier != PopulationTier.E)
+            {
+                AssertEqual(
+                    CrisisSeverity.Level4,
+                    Detect(detector, CreateSnapshot(populationTier: tier, foundationCombatants: level4Foundation, chaosCombatants: 1)).Severity,
+                    $"{tier} 档 SEC L4 边界错误");
+            }
+
+            AssertEqual(
+                CrisisSeverity.Level5,
+                Detect(detector, CreateSnapshot(populationTier: tier, foundationCombatants: 0, chaosCombatants: 1)).Severity,
+                $"{tier} 档 SEC L5 边界错误");
+        }
+    }
+
+    private static CrisisDetectionResult Detect(ICrisisDetector detector, RoundSnapshot snapshot)
+    {
+        return detector.Detect(
+            snapshot,
+            CreateResult(snapshot),
+            new CrisisState(),
+            new CrisisContext());
+    }
+
+    private static void StatefulCrisisContractsArePublished()
+    {
+        Type assemblyType = typeof(DlrcEvaluator);
+        string[] typeNames =
+        {
+            "EmergencyEvents.Crisis.Detectors.ConCrisisDetector",
+            "EmergencyEvents.Crisis.Detectors.EndCrisisDetector",
+        };
+        string[] snapshotProperties =
+        {
+            "HostileThirdPartyActive",
+            "HostileThirdPartyCombatants",
+            "SurfaceFoundationCombatants",
+            "SurfaceChaosCombatants",
+            "SurfaceMainScp",
+            "SurfaceOtherHostiles",
+        };
+
+        foreach (string typeName in typeNames)
+        {
+            AssertTrue(assemblyType.Assembly.GetType(typeName) is not null, $"缺少 {typeName}");
+        }
+
+        AssertTrue(typeof(CrisisAssessment).GetProperty("Code") is not null, "CrisisAssessment 必须公开最终代码");
+        AssertTrue(typeof(CrisisAssessment).GetProperty("ActiveTags") is not null, "CrisisAssessment 必须公开激活标签");
+        AssertTrue(typeof(CrisisAssessment).GetMethod("IsActive") is not null, "CrisisAssessment 必须支持标签查询");
+
+        foreach (string propertyName in snapshotProperties)
+        {
+            AssertTrue(typeof(RoundSnapshot).GetProperty(propertyName) is not null, $"RoundSnapshot 缺少事实字段 {propertyName}");
+        }
+
+        AssertTrue(typeof(MajorWaveSnapshot).GetProperty("CompletedAt") is not null, "MajorWaveSnapshot 必须保留实际波次完成时刻");
+    }
+
+    private static void ContainmentUsesSecondMajorWaveCheckpoints()
+    {
+        DateTime secondWaveAt = new DateTime(2026, 8, 24, 14, 0, 0, DateTimeKind.Utc);
+        MajorWaveSnapshot[] waves =
+        {
+            CreateWave(6, 6, false, 0d, secondWaveAt.AddMinutes(-5)),
+            CreateWave(6, 6, false, 0d, secondWaveAt),
+        };
+        ConCrisisDetector detector = new ConCrisisDetector();
+        CrisisState state = new CrisisState();
+
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: secondWaveAt, mainScpAlive: 3, scp0492Count: 4, majorWaveHistory: waves), state).Severity, "第二波刚结束不能触发 CON");
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(4).AddSeconds(59), mainScpAlive: 3, scp0492Count: 4, majorWaveHistory: waves), state).Severity, "CON 五分钟前不能触发");
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(5), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "SCP 当量下降至少 1.0 时 CON 必须解除");
+        AssertEqual(CrisisSeverity.Level3, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(10), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "第一次收容失败必须为 CON L3");
+        AssertEqual(CrisisSeverity.Level4, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(15), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "第二次连续收容失败必须为 CON L4");
+        AssertEqual(CrisisSeverity.Level5, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(20), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "第三次连续收容失败必须为 CON L5");
+    }
+
+    private static void ContainmentUsesActualWaveCompletionTime()
+    {
+        DateTime secondWaveStartedAt = new DateTime(2026, 8, 24, 15, 0, 0, DateTimeKind.Utc);
+        DateTime secondWaveCompletedAt = secondWaveStartedAt.AddMinutes(2);
+        MajorWaveSnapshot[] waves =
+        {
+            CreateWave(6, 6, false, 0d, secondWaveStartedAt.AddMinutes(-5)),
+            CreateWave(6, 6, false, 0d, secondWaveStartedAt, completedAt: secondWaveCompletedAt),
+        };
+        ConCrisisDetector detector = new ConCrisisDetector();
+        CrisisState state = new CrisisState();
+
+        Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt, mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state);
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt.AddMinutes(4).AddSeconds(59), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "CON 不得从波次开始时刻提前计算");
+        AssertEqual(CrisisSeverity.Level3, Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt.AddMinutes(5), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "CON 必须从实际波次完成五分钟后执行第一次检查");
+    }
+
+    private static void EndgameRequiresContinuousSurfaceStalemate()
+    {
+        DateTime detonationAt = new DateTime(2026, 8, 24, 14, 30, 0, DateTimeKind.Utc);
+        EndCrisisDetector detector = new EndCrisisDetector();
+        CrisisState state = new CrisisState();
+
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt, warheadDetonated: true), state).Severity, "核爆后没有地表敌对共存时 END 必须关闭");
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt, warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "地表僵持刚开始时 END 必须关闭");
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(4).AddSeconds(59), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "END 4:59 必须关闭");
+        AssertEqual(CrisisSeverity.Level3, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(5), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "END 5:00 必须为 L3");
+        AssertEqual(CrisisSeverity.Level4, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(8), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "END 8:00 必须为 L4");
+        AssertEqual(CrisisSeverity.Level5, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(12), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "END 12:00 必须为 L5");
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(13), warheadDetonated: true), state).Severity, "地表僵持消失时 END 必须重置");
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(18), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "僵持重新开始时不得沿用旧 END 计时");
+    }
+
+    private static void GoiRequiresRegisteredHostileThirdParty()
+    {
+        GoiCrisisDetector detector = new GoiCrisisDetector();
+        RoundSnapshot inactiveSnapshot = CreateSnapshot(hostileThirdPartyActive: false, hostileThirdPartyCombatants: 3);
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, inactiveSnapshot, CreateCrisisResult(inactiveSnapshot, 5, FoundationStrength.CRITICAL)).Severity, "没有注册敌对第三方时 GOI 必须关闭");
+
+        RoundSnapshot lowLevelSnapshot = CreateSnapshot(hostileThirdPartyActive: true, hostileThirdPartyCombatants: 3);
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, lowLevelSnapshot, CreateCrisisResult(lowLevelSnapshot, 2, FoundationStrength.CRITICAL)).Severity, "Global Level 低于 3 时 GOI 必须关闭");
+
+        RoundSnapshot adequateSnapshot = CreateSnapshot(hostileThirdPartyActive: true, hostileThirdPartyCombatants: 3);
+        AssertEqual(CrisisSeverity.Inactive, Detect(detector, adequateSnapshot, CreateCrisisResult(adequateSnapshot, 3, FoundationStrength.ADEQUATE)).Severity, "基金会并非明显劣势时 GOI 必须关闭");
+
+        RoundSnapshot activeSnapshot = CreateSnapshot(hostileThirdPartyActive: true, hostileThirdPartyCombatants: 3);
+        AssertEqual(CrisisSeverity.Level3, Detect(detector, activeSnapshot, CreateCrisisResult(activeSnapshot, 3, FoundationStrength.WEAK)).Severity, "敌对第三方、Global L3 与基金会劣势同时存在时 GOI 应为 L3");
+    }
+
+    private static CrisisDetectionResult Detect(ICrisisDetector detector, RoundSnapshot snapshot, DlrcEvaluationResult result)
+    {
+        return detector.Detect(snapshot, result, new CrisisState(), new CrisisContext());
+    }
+
+    private static void CrisisManagerContractsArePublished()
+    {
+        Type assemblyType = typeof(DlrcEvaluator);
+        string[] typeNames =
+        {
+            "EmergencyEvents.Crisis.CrisisManager",
+            "EmergencyEvents.Crisis.DlrcEvaluationCompletedEvent",
+            "EmergencyEvents.Crisis.DlrcEvaluationTrigger",
+        };
+
+        foreach (string typeName in typeNames)
+        {
+            AssertTrue(assemblyType.Assembly.GetType(typeName) is not null, $"缺少 {typeName}");
+        }
+    }
+
+    private static void CrisisManagerBuildsStableAssessment()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(
+            populationTier: PopulationTier.C,
+            scp0492Count: 4,
+            scp079Present: true,
+            scp079Tier: 4,
+            warheadUnlocked: true,
+            warheadActive: true);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 4, FoundationStrength.WEAK);
+        CrisisManager manager = new CrisisManager();
+        CrisisAssessment assessment = manager.Evaluate(new DlrcEvaluationCompletedEvent(
+            1001,
+            DlrcEvaluationTrigger.PERIODIC,
+            snapshot,
+            result))
+            ?? throw new InvalidOperationException("成功的 D-LRC 评估必须产生 CrisisAssessment");
+        AssertEqual("DLRC-C4-BIO+SYS", assessment.Code, "核弹状态暂不应产生 WAR 危机标签");
+        AssertSequence(
+            new[] { CrisisTag.BIO, CrisisTag.SYS },
+            assessment.ActiveTags,
+            "危机标签顺序错误");
+        AssertEqual(CrisisSeverity.Level3, assessment.GetSeverity(CrisisTag.BIO), "BIO 严重度错误");
+        AssertEqual(CrisisSeverity.Level4, assessment.GetSeverity(CrisisTag.SYS), "SYS 严重度错误");
+        AssertEqual(CrisisSeverity.Inactive, assessment.GetSeverity(CrisisTag.WAR), "核弹解锁和倒计时暂不应产生 WAR 危机");
+
+        CrisisAssessment? retained = manager.Evaluate(new DlrcEvaluationCompletedEvent(
+            1002,
+            DlrcEvaluationTrigger.POST_MAJOR_WAVE,
+            snapshot,
+            CreateInvalidResult(result)));
+        AssertTrue(ReferenceEquals(assessment, retained), "上游无效评估不得覆盖上一份有效 CrisisAssessment");
+        manager.CleanupRound();
+        AssertTrue(manager.CurrentCrisisAssessment is null, "Round Cleanup 必须清空 CrisisAssessment");
+    }
+
+    private static void EmergencyEventsCommandSyntaxRecognizesDlrcEvaluate()
+    {
+        Type? syntaxType = typeof(DlrcEvaluator).Assembly.GetType(
+            "EmergencyEvents.RemoteAdminCommands.EmergencyEventsCommandSyntax");
+        AssertTrue(syntaxType is not null, "必须提供 EmergencyEvents RA 命令语法解析器");
+
+        System.Reflection.MethodInfo? isDlrcEvaluate = syntaxType!.GetMethod(
+            "IsDlrcEvaluate",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        AssertTrue(isDlrcEvaluate is not null, "RA 命令语法解析器必须提供 IsDlrcEvaluate");
+
+        AssertTrue(
+                (bool)isDlrcEvaluate!.Invoke(null, new object[] { new[] { "dlrc", "evaluate" } })!,
+            "dlrc evaluate 必须被识别为立即评估命令");
+        AssertTrue(
+                !(bool)isDlrcEvaluate!.Invoke(null, new object[] { new[] { "dlrc" } })!,
+            "不完整的 dlrc 命令不得执行");
+        AssertTrue(
+                !(bool)isDlrcEvaluate!.Invoke(null, new object[] { new[] { "dlrc", "status" } })!,
+            "未知 dlrc 子命令不得执行");
+
+        System.Reflection.MethodInfo? isDlrcState = syntaxType.GetMethod(
+            "IsDlrcState",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        AssertTrue(isDlrcState is not null, "RA 命令语法解析器必须提供 IsDlrcState");
+        AssertTrue(
+            (bool)isDlrcState!.Invoke(null, new object[] { new[] { "dlrc", "state" } })!,
+            "dlrc state 必须被识别为状态查询命令");
+        AssertTrue(
+            !(bool)isDlrcState.Invoke(null, new object[] { new[] { "dlrc", "evaluate", "now" } })!,
+            "状态查询命令不得接受额外参数");
+    }
+
+    private static void DlrcStateReportContainsRequiredFacts()
+    {
+        Type? formatterType = typeof(DlrcEvaluator).Assembly.GetType(
+            "EmergencyEvents.RemoteAdminCommands.DlrcStateReportFormatter");
+        AssertTrue(formatterType is not null, "必须提供 D-LRC 状态报告格式化器");
+
+        System.Reflection.MethodInfo? format = formatterType!.GetMethod(
+            "Format",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        AssertTrue(format is not null, "状态报告格式化器必须提供 Format");
+
+        RoundSnapshot snapshot = CreateSnapshot(
+            populationTier: PopulationTier.C,
+            roundStartPopulation: 33,
+            currentOnlinePlayers: 30,
+            foundationCombatants: 11,
+            chaosCombatants: 4,
+            mainScpAlive: 2,
+            startingScpCount: 3,
+            scp0492Count: 5,
+            scp079Present: true,
+            scp079Tier: 4);
+        DlrcEvaluationResult result = CreateResult(snapshot);
+        CrisisAssessment assessment = new CrisisAssessment(
+            7,
+            DlrcEvaluationTrigger.MANUAL,
+            snapshot,
+            result,
+            new[]
+            {
+                new CrisisDetectionResult(
+                    CrisisTag.BIO,
+                    true,
+                    CrisisSeverity.Level4,
+                    "Zombie pressure",
+                    new Dictionary<string, double> { ["ZombieCount"] = 5d }),
+            });
+        string report = (string)format!.Invoke(null, new object?[] { snapshot, result, assessment })!;
+
+        string[] requiredTokens =
+        {
+            "PopulationTier=C",
+            "RoundStartPopulation=33",
+            "CurrentOnlinePlayers=30",
+            "ResponseCode=",
+            "NaturalResponseScore=",
+            "EffectiveResponseScore=",
+            "ScpPresence=",
+            "FoundationCombatShare=",
+            "CrisisCode=",
+            "BIO=Active:True",
+        };
+        foreach (string token in requiredTokens)
+        {
+            AssertTrue(report.Contains(token, StringComparison.Ordinal), $"状态报告缺少 {token}");
+        }
+    }
+
+    private static void LowPopulationSuspensionIsRoundLocked()
+    {
+        PluginRuntimeCoordinator coordinator = new PluginRuntimeCoordinator(isEnabledForNextRound: true, minimumPlayers: 16);
+
+        coordinator.BeginRound(15);
+        AssertEqual(PluginRuntimeState.STANDBY, coordinator.State, "15 人开局必须保持 STANDBY");
+        AssertTrue(!coordinator.IsEmergencyEventsActiveForRound, "15 人开局不得激活 EmergencyEvents");
+
+        coordinator.BeginRound(16);
+        AssertEqual(PluginRuntimeState.ACTIVE, coordinator.State, "16 人开局必须激活 EmergencyEvents");
+        AssertTrue(coordinator.IsEmergencyEventsActiveForRound, "16 人开局必须标记为有效 EE 回合");
+
+        coordinator.ObservePopulation(15);
+        AssertEqual(PluginRuntimeState.LOW_POPULATION_SUSPENDED, coordinator.State, "有效 EE 回合掉至 15 人必须暂停");
+        AssertTrue(!coordinator.IsEmergencyEventsActiveForRound, "低人口暂停后不得继续 EE 干预");
+
+        coordinator.ObservePopulation(18);
+        AssertEqual(PluginRuntimeState.LOW_POPULATION_SUSPENDED, coordinator.State, "本回合人口恢复后不得重新激活");
+
+        coordinator.EndRound();
+        coordinator.BeginRound(16);
+        AssertEqual(PluginRuntimeState.ACTIVE, coordinator.State, "下一局必须重新按开局人数判定");
+    }
+
+    private static void EnableDisableDefersRoundActivation()
+    {
+        PluginRuntimeCoordinator coordinator = new PluginRuntimeCoordinator(isEnabledForNextRound: true, minimumPlayers: 16);
+        coordinator.BeginRound(20);
+        AssertEqual(PluginRuntimeState.ACTIVE, coordinator.State, "有效回合应先启动");
+
+        coordinator.Disable();
+        AssertEqual(PluginRuntimeState.DISABLED, coordinator.State, "disable 必须立即停止本局干预");
+        AssertTrue(!coordinator.IsEnabledForNextRound, "disable 必须关闭下一局启用标记");
+
+        bool activatedImmediately = coordinator.Enable(isRoundInProgress: true);
+        AssertTrue(!activatedImmediately, "进行中的回合 enable 不得重新执行 Round Core");
+        AssertEqual(PluginRuntimeState.DISABLED, coordinator.State, "进行中的回合 enable 必须保持本局 DISABLED");
+        AssertTrue(coordinator.IsEnabledForNextRound, "enable 必须为下一局恢复启用标记");
+
+        coordinator.EndRound();
+        coordinator.BeginRound(20);
+        AssertEqual(PluginRuntimeState.ACTIVE, coordinator.State, "下一局必须按新的启用标记激活");
+    }
+
+    private static void EmergencyEventsCommandSyntaxRecognizesCommandTree()
+    {
+        (string[] Arguments, EmergencyEventsCommandKind Expected)[] supported =
+        {
+            (Array.Empty<string>(), EmergencyEventsCommandKind.Help),
+            (new[] { "status" }, EmergencyEventsCommandKind.Status),
+            (new[] { "modules" }, EmergencyEventsCommandKind.Modules),
+            (new[] { "module", "dlrc" }, EmergencyEventsCommandKind.ModuleDetail),
+            (new[] { "round" }, EmergencyEventsCommandKind.Round),
+            (new[] { "wave", "history", "10" }, EmergencyEventsCommandKind.WaveHistory),
+            (new[] { "dlrc", "breakdown" }, EmergencyEventsCommandKind.DlrcBreakdown),
+            (new[] { "crisis", "check", "bio" }, EmergencyEventsCommandKind.CrisisCheck),
+            (new[] { "test", "crisis", "end", "simulate", "720" }, EmergencyEventsCommandKind.TestCrisisEndSimulate),
+            (new[] { "test", "crisis", "con", "checkpoint", "commit" }, EmergencyEventsCommandKind.TestCrisisConCheckpointCommit),
+            (new[] { "cleanup" }, EmergencyEventsCommandKind.Cleanup),
+        };
+
+        foreach ((string[] arguments, EmergencyEventsCommandKind expected) in supported)
+        {
+            AssertTrue(
+                EmergencyEventsCommandSyntax.TryParse(arguments, out EmergencyEventsCommandRequest request),
+                $"命令 {string.Join(" ", arguments)} 必须被识别");
+            AssertEqual(expected, request.Kind, $"命令 {string.Join(" ", arguments)} 的类型错误");
+        }
+
+        AssertTrue(
+            !EmergencyEventsCommandSyntax.TryParse(new[] { "module", "disable", "dlrc" }, out _),
+            "第一版不得接受单模块运行时禁用");
+        AssertTrue(
+            !EmergencyEventsCommandSyntax.TryParse(new[] { "crisis", "force", "bio" }, out _),
+            "第一版不得接受直接伪造真实危机");
+    }
+
+    private static CrisisDetectionResult Detect(ICrisisDetector detector, RoundSnapshot snapshot, CrisisState state)
+    {
+        return detector.Detect(snapshot, CreateResult(snapshot), state, new CrisisContext());
     }
 
     private static void BadgeRegistryRemovesBadgeAfterDeath()
@@ -109,63 +620,6 @@ internal static class Program
         registry.Remove(12);
 
         AssertTrue(!registry.TryGet(12, out _), "死亡恢复后不应继续保留玩家 Badge 映射");
-    }
-
-    private static void FirstWavePolicySkipsAtDeadline()
-    {
-        AssertTrue(
-            FirstWavePolicy.ShouldSkip(true, 390f, 390f, 0),
-            "截止时间无普通观察者时应跳过首波");
-        AssertTrue(
-            !FirstWavePolicy.ShouldSkip(true, 390f, 390f, 1),
-            "截止时间仍有普通观察者时不应跳过首波");
-        AssertTrue(
-            !FirstWavePolicy.ShouldSkip(false, 390f, 390f, 0),
-            "首波已不在等待状态时不应重复跳过");
-        AssertEqual(
-            600f,
-            FirstWavePolicy.GetNextNormalWaveDueAfterSkip(300f, 300f),
-            "首波跳过后下一次普通波次应保持 10:00 固定窗口");
-    }
-
-    private static void FixedWaveWindowsDoNotDrift()
-    {
-        AssertEqual(600f, FirstWavePolicy.GetNextFixedWaveDue(300f, 300f), "第一波实际晚到不应改变第二个固定窗口");
-        AssertEqual(900f, FirstWavePolicy.GetNextFixedWaveDue(600f, 300f), "第二窗口后应保持 15:00");
-    }
-
-    private static void SupportScoreLedgerScoresScpDeath()
-    {
-        SupportScoreLedger ledger = new SupportScoreLedger();
-        AssertTrue(ledger.TryScoreScpDeath("scp-1", SupportFaction.Foundation, out int first), "首次 SCP 死亡应计分");
-        AssertEqual(15, first, "SCP 死亡应增加 15 分");
-        AssertTrue(!ledger.TryScoreScpDeath("scp-1", SupportFaction.Chaos, out _), "同一 SCP 死亡不得重复计分");
-        AssertEqual(15, ledger.FoundationScore, "Foundation 死亡积分错误");
-        AssertEqual(0, ledger.ChaosScore, "重复死亡不应给 Chaos 计分");
-    }
-
-    private static void SupportScoreLedgerScoresDamageThresholds()
-    {
-        SupportScoreLedger ledger = new SupportScoreLedger();
-        AssertEqual(0, ledger.RecordScpDamage("scp-1", 0d, 100d, SupportFaction.Foundation).Count, "零伤害不得制造 0% 阈值");
-        AssertEqual(1, ledger.RecordScpDamage("scp-1", 15d, 100d, SupportFaction.Foundation).Count, "15 点伤害应只跨过 10% 阈值");
-        AssertEqual(2, ledger.RecordScpDamage("scp-1", 15d, 100d, SupportFaction.Chaos).Count, "累计 30 点伤害应补齐 20% 和 30% 阈值");
-        AssertEqual(2, ledger.FoundationScore, "Foundation 首个阈值分数错误");
-        AssertEqual(4, ledger.ChaosScore, "Chaos 多阈值分数错误");
-        AssertEqual(0, ledger.RecordScpDamage("scp-1", 1d, 100d, SupportFaction.Foundation).Count, "累计损伤未跨新阈值时不得重复计分");
-    }
-
-    private static void SupportScoreLedgerScoresItemInstances()
-    {
-        SupportScoreLedger ledger = new SupportScoreLedger();
-        AssertTrue(ledger.TryScoreItem(11, SupportItemKind.UniqueScp, SupportFaction.Foundation, false, out int unique), "自然唯一 SCP 物品应计分");
-        AssertEqual(2, unique, "唯一 SCP 物品应增加 2 分");
-        AssertTrue(!ledger.TryScoreItem(11, SupportItemKind.UniqueScp, SupportFaction.Foundation, false, out _), "丢弃重捡同一实例不得重复计分");
-        AssertTrue(!ledger.TryScoreItem(12, SupportItemKind.UniqueScp, SupportFaction.Foundation, true, out _), "SCP-914 产物不得计入唯一物品分数");
-        AssertTrue(ledger.TryScoreItem(13, SupportItemKind.ConsumableScp, SupportFaction.Chaos, false, out int consumable), "自然消耗品 SCP 物品应计分");
-        AssertEqual(1, consumable, "消耗品 SCP 物品应增加 1 分");
-        AssertEqual(2, ledger.FoundationScore, "唯一物品总分错误");
-        AssertEqual(1, ledger.ChaosScore, "消耗品总分错误");
     }
 
     private static void ScpRolePolicyUsesOne939()
@@ -192,49 +646,289 @@ internal static class Program
         AssertEqual(1, scp939Count, "高人口回合不得无条件生成第二只 SCP-939");
     }
 
-    private static void WaveTimerUsesFiveMinuteDueTime()
+    private static void PrimaryWaveCapsMatchSpecification()
     {
-        AssertTrue(!WaveControlPolicy.IsDue(299.99f, 300f), "05:00 前不应触发插件波次");
-        AssertTrue(WaveControlPolicy.IsDue(300f, 300f), "05:00 应触发插件波次");
-        AssertTrue(WaveControlPolicy.IsDue(330f, 300f), "超过到点时间仍应允许补触发插件波次");
+        PrimaryWaveCaps caps = new PrimaryWaveCaps();
+        AssertEqual(6, caps.GetCap(PopulationTier.E), "E 档 Primary Wave 上限错误");
+        AssertEqual(6, caps.GetCap(PopulationTier.D), "D 档 Primary Wave 上限错误");
+        AssertEqual(8, caps.GetCap(PopulationTier.C), "C 档 Primary Wave 上限错误");
+        AssertEqual(14, caps.GetCap(PopulationTier.B), "B 档 Primary Wave 上限错误");
+        AssertEqual(18, caps.GetCap(PopulationTier.A), "A 档 Primary Wave 上限错误");
     }
 
-    private static void WaveGateRejectsNativeAndMiniWaves()
+    private static void PrimaryWaveCapsNeverExpandVanillaWave()
     {
-        AssertTrue(WaveControlPolicy.ShouldAllowRespawn(true, false), "插件发起的正常大波应允许进入刷新管线");
-        AssertTrue(!WaveControlPolicy.ShouldAllowRespawn(false, false), "原版自行触发的正常波次必须拦截");
-        AssertTrue(!WaveControlPolicy.ShouldAllowRespawn(true, true), "插件也不得放行小波");
+        PrimaryWaveCaps caps = new PrimaryWaveCaps();
+        AssertEqual(4, PrimaryWavePolicy.GetCappedMaximumRespawnAmount(4, PopulationTier.E, caps), "原版仅选四人时不得扩充到六人");
+        AssertEqual(6, PrimaryWavePolicy.GetCappedMaximumRespawnAmount(12, PopulationTier.E, caps), "原版人数超过 E 档上限时应截断");
+        AssertEqual(0, PrimaryWavePolicy.GetCappedMaximumRespawnAmount(0, PopulationTier.A, caps), "空原版波次不得被扩充");
     }
 
-    private static void PluginWaveRequestAllowsRespawnWhenSelectingEventSkipped()
+    private static void PrimaryWaveUsesLockedPopulationTier()
     {
-        AssertTrue(
-            WaveControlPolicy.ShouldAllowTriggeredRespawn(true, false, false),
-            "插件已发起 ForceWave 请求但没有经过选择事件时仍应允许正常波次");
-        AssertTrue(
-            WaveControlPolicy.ShouldAllowTriggeredRespawn(false, true, false),
-            "已进入插件波次状态的正常波次应继续允许");
-        AssertTrue(
-            !WaveControlPolicy.ShouldAllowTriggeredRespawn(true, false, true),
-            "插件请求的小波仍必须禁止");
-        AssertTrue(
-            !WaveControlPolicy.ShouldAllowTriggeredRespawn(false, false, false),
-            "没有插件请求的原版正常波次仍必须禁止");
+        PrimaryWaveCaps caps = new PrimaryWaveCaps();
+        int lockedTierCap = PrimaryWavePolicy.GetCappedMaximumRespawnAmount(18, PopulationTier.E, caps);
+        AssertEqual(6, lockedTierCap, "开局 16 人锁定 E 档后，即使后来在线人数上升也必须继续使用 E 档上限");
     }
 
-    private static void ManualWaveUsesPausedNativeTimer()
+    private static void MiniWaveCancellationRespectsConfiguration()
     {
-        AssertTrue(WaveControlPolicy.ShouldAllowManualNormalWave(true, false), "原版计时器暂停后应允许 RA 手动正常大波");
-        AssertTrue(!WaveControlPolicy.ShouldAllowManualNormalWave(false, false), "原版计时器未暂停时不得放行未知原版波次");
-        AssertTrue(!WaveControlPolicy.ShouldAllowManualNormalWave(true, true), "RA 手动 mini wave 仍必须禁止");
+        AssertTrue(PrimaryWavePolicy.ShouldCancelMiniWave(true, true), "启用配置后必须取消 Mini-Wave");
+        AssertTrue(!PrimaryWavePolicy.ShouldCancelMiniWave(false, true), "Primary Wave 不得被误取消");
+        AssertTrue(!PrimaryWavePolicy.ShouldCancelMiniWave(true, false), "关闭配置后不得取消 Mini-Wave");
     }
 
-    private static void LateDummyIsEligibleObserver()
+    private static void MiniWaveCancellationUsesRespawningBoundary()
     {
-        AssertTrue(WaveControlPolicy.IsEligibleObserver(true, false, false, true), "晚加入且角色为 None 的 dummy 应可参与刷新");
-        AssertTrue(WaveControlPolicy.IsEligibleObserver(true, false, true, false), "普通 Spectator 应可参与刷新");
-        AssertTrue(!WaveControlPolicy.IsEligibleObserver(true, true, false, true), "Overwatch 不得参与刷新");
-        AssertTrue(!WaveControlPolicy.IsEligibleObserver(false, false, false, true), "断开连接的 dummy 不得参与刷新");
+        AssertTrue(
+            !PrimaryWavePolicy.ShouldCancelMiniWaveAtBoundary(
+                true,
+                true,
+                MiniWaveCancellationBoundary.SelectingRespawnTeam),
+            "选择阶段不得取消 Mini-Wave，否则原版会重复进入选择事件");
+        AssertTrue(
+            PrimaryWavePolicy.ShouldCancelMiniWaveAtBoundary(
+                true,
+                true,
+                MiniWaveCancellationBoundary.RespawningTeam),
+            "真正刷新阶段必须取消 Mini-Wave");
+        AssertTrue(
+            !PrimaryWavePolicy.ShouldCancelMiniWaveAtBoundary(
+                false,
+                true,
+                MiniWaveCancellationBoundary.RespawningTeam),
+            "Primary Wave 在刷新阶段不得被当成 Mini-Wave 取消");
+    }
+
+    private static void PrimaryWaveCapPreservesVanillaSelection()
+    {
+        int[] vanillaSelection = { 10, 11, 101, 102, 103, 104, 105 };
+        IReadOnlyList<int> capped = PrimaryWavePolicy.TruncateVanillaSelection(vanillaSelection, 6);
+        AssertSequence(new[] { 10, 11, 101, 102, 103, 104 }, capped, "人数上限只能保留原版名单的前段，不得重新筛选或排除 Late Join");
+        AssertEqual(7, vanillaSelection.Length, "原版选择名单不得被策略函数修改");
+    }
+
+    private static void MajorWaveHistoryRollsOverDeduplicatesAndCleansUp()
+    {
+        MajorWaveHistory history = new MajorWaveHistory();
+        DateTime now = new DateTime(2026, 8, 24, 12, 0, 0, DateTimeKind.Utc);
+        MajorWaveRecord first = history.Record("RW-1", "NtfWave", PopulationTier.E, 6, new[] { 1, 2, 3, 4, 5, 6 }, now, now.AddSeconds(8));
+        MajorWaveRecord second = history.Record("RW-2", "ChaosWave", PopulationTier.E, 5, new[] { 7, 8, 9, 10, 11 }, now.AddMinutes(5), now.AddMinutes(5).AddSeconds(8));
+
+        AssertEqual(second, history.CurrentWave, "最新波次应成为 CurrentWave");
+        AssertEqual(second, history.LastMajorWave, "最新波次应成为 LastMajorWave");
+        AssertEqual(first, history.PreviousMajorWave, "前一波应成为 PreviousMajorWave");
+        AssertTrue(history.TryMarkPostMajorWavePublished(second), "首次 POST_MAJOR_WAVE 应发布");
+        AssertTrue(!history.TryMarkPostMajorWavePublished(second), "同一波不得重复发布 POST_MAJOR_WAVE");
+        AssertTrue(second.TryCompleteSurvivalObservation(3, now.AddMinutes(7)), "存活采样首次应完成");
+        AssertTrue(!second.TryCompleteSurvivalObservation(2, now.AddMinutes(8)), "存活采样不得重复覆盖");
+        AssertEqual(3, second.ToSnapshot().SurvivingCountAtEvaluation, "存活人数事实记录错误");
+        AssertEqual(now.AddMinutes(5), second.ToSnapshot().StartedAt, "波次快照必须保留实际开始时间");
+
+        history.Clear();
+        AssertEqual(0, history.Count, "清理后历史必须为空");
+        AssertEqual(null, history.CurrentWave, "清理后 CurrentWave 必须为空");
+        AssertEqual(null, history.LastMajorWave, "清理后 LastMajorWave 必须为空");
+        AssertEqual(null, history.PreviousMajorWave, "清理后 PreviousMajorWave 必须为空");
+    }
+
+    private static void PrimaryWaveTimerExtensionMapsSpawningAndOpposingTimers()
+    {
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.ShouldApply("NtfWave", false, 6, true, 60, 15, false),
+            "成功的 NTF Primary Wave 应应用 Timer Extension");
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.TryGetExtensions("NtfWave", 60, 15, out int foundation, out int chaos),
+            "NTF Primary Wave 应生成 60/15 增量");
+        AssertEqual(60, foundation, "Foundation 刷新方增量错误");
+        AssertEqual(15, chaos, "Chaos 对方增量错误");
+
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.TryGetExtensions("ChaosWave", 60, 15, out foundation, out chaos),
+            "Chaos Primary Wave 应生成 15/60 增量");
+        AssertEqual(15, foundation, "Foundation 对方增量错误");
+        AssertEqual(60, chaos, "Chaos 刷新方增量错误");
+    }
+
+    private static void FoundationWaveUsesDynamicVanillaTimers()
+    {
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.TryGetExtensions("NtfWave", 60, 15, out int foundation, out int chaos),
+            "Foundation Wave 应生成计时器增量");
+        AssertNear(510d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(450d, foundation), "Foundation 450+60 错误");
+        AssertNear(302d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(287d, chaos), "Chaos 287+15 错误");
+        AssertNear(390d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(330d, foundation), "Foundation 330+60 错误");
+        AssertNear(436d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(421d, chaos), "Chaos 421+15 错误");
+    }
+
+    private static void ChaosWaveUsesDynamicVanillaTimers()
+    {
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.TryGetExtensions("ChaosWave", 60, 15, out int foundation, out int chaos),
+            "Chaos Wave 应生成计时器增量");
+        AssertNear(315d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(300d, foundation), "Foundation 300+15 错误");
+        AssertNear(510d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(450d, chaos), "Chaos 450+60 错误");
+    }
+
+    private static void VanillaResetRequiresFreshTimer()
+    {
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.IsVanillaResetDetected(0d),
+            "TimePassed=0 应视为原版 Reset 已完成");
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.IsVanillaResetDetected(0.49d),
+            "刚完成 Reset 的小幅 TimePassed 应视为已完成");
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.IsVanillaResetDetected(0.51d),
+            "过大的 TimePassed 不应误判为刚完成 Reset");
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.IsVanillaResetDetected(-1d),
+            "负 TimePassed 不应视为有效 Reset");
+    }
+
+    private static void DisabledPrimaryWaveTimerExtensionDoesNotApply()
+    {
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.ShouldApply("NtfWave", false, 6, true, 0, 0, false),
+            "配置为 0 时不得修改计时器");
+    }
+
+    private static void MiniWaveDoesNotApplyTimerExtension()
+    {
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.ShouldApply("NtfMiniWave", true, 6, true, 60, 15, false),
+            "Mini-Wave 不得应用 Timer Extension");
+        AssertTrue(!PrimaryWaveTimerExtensionPolicy.IsPrimaryFaction("NtfMiniWave"), "Mini-Wave 不应被识别为 Primary 阵营");
+    }
+
+    private static void ZeroSpawnPrimaryWaveDoesNotApplyTimerExtension()
+    {
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.ShouldApply("NtfWave", false, 0, true, 60, 15, false),
+            "零人 Primary Wave 不得应用 Timer Extension");
+    }
+
+    private static void IncompletePrimaryWaveDoesNotApplyTimerExtension()
+    {
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.ShouldApply("ChaosWave", false, 4, false, 60, 15, false),
+            "未完成或取消的 Primary Wave 不得应用 Timer Extension");
+    }
+
+    private static void DuplicateWaveDoesNotApplyTimerExtension()
+    {
+        MajorWaveHistory history = new MajorWaveHistory();
+        DateTime now = new DateTime(2026, 8, 24, 12, 0, 0, DateTimeKind.Utc);
+        MajorWaveRecord record = history.Record("TW-DUP", "ChaosWave", PopulationTier.E, 4, new[] { 1, 2, 3, 4 }, now, now.AddSeconds(1));
+        MajorWaveRecord duplicateRecord = history.Record("TW-DUP", "ChaosWave", PopulationTier.E, 4, new[] { 1, 2, 3, 4 }, now, now.AddSeconds(1));
+
+        AssertEqual(record, duplicateRecord, "相同 WaveId 应复用已有记录");
+        AssertEqual(1, history.Count, "相同 WaveId 不得重复入库");
+        AssertTrue(record.TryMarkTimerExtensionProcessed(), "首次处理 Timer Extension 应成功");
+        AssertTrue(!record.TryMarkTimerExtensionProcessed(), "同一 WaveId 的 Timer Extension 处理标记不得重复成功");
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.ShouldApply("ChaosWave", false, record.ActualSpawnedCount, true, 60, 15, true),
+            "同一 WaveId 已处理后不得再次应用 Timer Extension");
+    }
+
+    private static void NtfPrimaryWaveIsTimerExtensionTarget()
+    {
+        AssertTrue(PrimaryWaveTimerExtensionPolicy.IsPrimaryFaction("NtfWave"), "NtfWave 应是 Primary Wave");
+    }
+
+    private static void ChaosPrimaryWaveIsTimerExtensionTarget()
+    {
+        AssertTrue(PrimaryWaveTimerExtensionPolicy.IsPrimaryFaction("ChaosWave"), "ChaosWave 应是 Primary Wave");
+    }
+
+    private static void TimerExtensionDoesNotDuplicatePostMajorWave()
+    {
+        MajorWaveHistory history = new MajorWaveHistory();
+        DateTime now = new DateTime(2026, 8, 24, 12, 0, 0, DateTimeKind.Utc);
+        MajorWaveRecord record = history.Record("TW-1", "NtfWave", PopulationTier.E, 6, new[] { 1, 2, 3, 4, 5, 6 }, now, now.AddSeconds(1));
+
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.ShouldApply("NtfWave", false, record.ActualSpawnedCount, true, 60, 15, false),
+            "正常波次应允许 Timer Extension");
+        AssertTrue(history.TryMarkPostMajorWavePublished(record), "首次 POST_MAJOR_WAVE 应发布");
+        AssertTrue(!history.TryMarkPostMajorWavePublished(record), "Timer Extension 不得产生第二次 POST_MAJOR_WAVE");
+    }
+
+    private static void InvalidTimerExtensionConfigurationFallsBackSafely()
+    {
+        AssertEqual(60, PrimaryWaveTimerExtensionPolicy.NormalizeConfiguredSeconds(-1, 60), "刷新方负数配置应回退到 60 秒");
+        AssertEqual(15, PrimaryWaveTimerExtensionPolicy.NormalizeConfiguredSeconds(301, 15), "对方超限配置应回退到 15 秒");
+        AssertEqual(0, PrimaryWaveTimerExtensionPolicy.NormalizeConfiguredSeconds(0, 60), "0 应保留为禁用配置");
+        AssertEqual(60, PrimaryWaveTimerExtensionPolicy.DefaultSpawningFactionSeconds, "刷新方默认增量应为 60 秒");
+        AssertEqual(15, PrimaryWaveTimerExtensionPolicy.DefaultOpposingFactionSeconds, "对方默认增量应为 15 秒");
+        AssertEqual(300, PrimaryWaveTimerExtensionPolicy.NormalizeConfiguredSeconds(300, 60), "300 秒应是合法上界");
+        AssertEqual(15, PrimaryWaveTimerExtensionPolicy.NormalizeConfiguredSeconds(15, 60), "合法 15 秒配置不应改变");
+    }
+
+    private static void TimerExtensionSidesCanBeDisabledIndependently()
+    {
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.ShouldApply("NtfWave", false, 2, true, 0, 15, false),
+            "刷新方禁用时，对方仍应可以单独应用");
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.ShouldApply("NtfWave", false, 2, true, 60, 0, false),
+            "对方禁用时，刷新方仍应可以单独应用");
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.ShouldApply("NtfWave", false, 2, true, 0, 0, false),
+            "两边都禁用时不得应用");
+    }
+
+    private static void TimerExtensionDoesNotAccumulateAcrossWaves()
+    {
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.TryGetExtensions("NtfWave", 60, 15, out int firstFoundation, out int firstChaos),
+            "第一波应生成无状态增量");
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.TryGetExtensions("NtfWave", 60, 15, out int secondFoundation, out int secondChaos),
+            "第二波应重新从原版值生成增量");
+        AssertEqual(firstFoundation, secondFoundation, "刷新方增量不应跨波次累加");
+        AssertEqual(firstChaos, secondChaos, "对方增量不应跨波次累加");
+        AssertNear(390d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(330d, secondFoundation), "第二波必须基于新的原版值计算");
+        AssertNear(345d, PrimaryWaveTimerExtensionPolicy.AddExtensionSeconds(330d, secondChaos), "第二波对方必须基于新的原版值计算");
+    }
+
+    private static void SpecialPersonnelEventDoesNotApplyTimerExtension()
+    {
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.IsPrimaryFaction("Beta7"),
+            "Beta-7 不应被识别为 Primary Wave");
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.ShouldApply("Beta7", false, 4, true, 60, 15, false),
+            "特殊人员事件不得应用 Timer Extension");
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.TryGetExtensions("Nu7", 60, 15, out _, out _),
+            "Nu-7 不应生成 Foundation/Chaos 计时器增量");
+    }
+
+    private static void BusyEvaluatorCoalescesPostMajorWaveQueue()
+    {
+        AssertTrue(
+            PostMajorWaveQueuePolicy.ShouldQueue(0),
+            "没有补算时应允许排队");
+        AssertTrue(
+            !PostMajorWaveQueuePolicy.ShouldQueue(1),
+            "已有补算时不得继续排队");
+        AssertTrue(
+            !PostMajorWaveQueuePolicy.ShouldQueue(9),
+            "多个事件也只能保留一个补算");
+    }
+
+    private static void ActualSpawnedPlayerRequiresSuccessfulNativeRole()
+    {
+        AssertTrue(
+            PrimaryWaveTimerExtensionPolicy.IsActualSpawnedPlayer(true, true, true),
+            "连接、存活且阵营匹配的玩家才算实际出生");
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.IsActualSpawnedPlayer(true, false, true),
+            "角色设置失败而未存活的候选者不得计入实际出生");
+        AssertTrue(
+            !PrimaryWaveTimerExtensionPolicy.IsActualSpawnedPlayer(true, true, false),
+            "阵营不匹配的候选者不得计入实际出生");
     }
 
     private static void RoundRestartResetsAllRoundState()
@@ -1700,6 +2394,43 @@ internal static class Program
             source.Code);
     }
 
+    private static DlrcEvaluationResult CreateCrisisResult(
+        RoundSnapshot snapshot,
+        int finalLevel,
+        FoundationStrength foundationStrength)
+    {
+        DlrcEvaluationResult source = CreateResult(snapshot);
+        ControlAssessment control = new ControlAssessment(
+            ThreatTrend.STABLE,
+            0d,
+            null,
+            foundationStrength,
+            0d,
+            WavePerformance.NEUTRAL,
+            BattlefieldMomentum.NEUTRAL,
+            0,
+            0,
+            false,
+            false,
+            false,
+            ControlState.CONTROLLED,
+            finalLevel);
+        return new DlrcEvaluationResult(
+            source.RoundId,
+            source.Timestamp,
+            source.PopulationTier,
+            source.NaturalResponseScore,
+            source.PersistentAdjustment,
+            source.EffectiveResponseScore,
+            source.ResponseBreakdown,
+            finalLevel,
+            control,
+            ControlState.CONTROLLED,
+            finalLevel,
+            isValid: true,
+            $"DLRC-{source.PopulationTier}{finalLevel}");
+    }
+
     private static ResponseBreakdown CalculateBreakdown(
         RoundSnapshot snapshot,
         EvaluationOptions? options = null,
@@ -1736,7 +2467,13 @@ internal static class Program
         IEnumerable<MajorWaveSnapshot>? majorWaveHistory = null,
         int recentFoundationDeaths120s = 0,
         int recentHostileDeaths120s = 0,
-        int recentMainScpDeaths120s = 0)
+        int recentMainScpDeaths120s = 0,
+        bool hostileThirdPartyActive = false,
+        int hostileThirdPartyCombatants = 0,
+        int surfaceFoundationCombatants = 0,
+        int surfaceChaosCombatants = 0,
+        int surfaceMainScp = 0,
+        int surfaceOtherHostiles = 0)
     {
         return new RoundSnapshot(
             roundId: roundId,
@@ -1762,7 +2499,13 @@ internal static class Program
             majorWaveHistory: majorWaveHistory,
             recentFoundationDeaths120s: recentFoundationDeaths120s,
             recentHostileDeaths120s: recentHostileDeaths120s,
-            recentMainScpDeaths120s: recentMainScpDeaths120s);
+            recentMainScpDeaths120s: recentMainScpDeaths120s,
+            hostileThirdPartyActive: hostileThirdPartyActive,
+            hostileThirdPartyCombatants: hostileThirdPartyCombatants,
+            surfaceFoundationCombatants: surfaceFoundationCombatants,
+            surfaceChaosCombatants: surfaceChaosCombatants,
+            surfaceMainScp: surfaceMainScp,
+            surfaceOtherHostiles: surfaceOtherHostiles);
     }
 
     private static MajorWaveSnapshot CreateWave(
@@ -1772,7 +2515,8 @@ internal static class Program
         double baseFailureScore,
         DateTime? startedAt = null,
         DateTime? evaluatedAt = null,
-        bool? isCatastrophic = null)
+        bool? isCatastrophic = null,
+        DateTime? completedAt = null)
     {
         DateTime start = startedAt ?? new DateTime(2026, 8, 23, 12, 0, 0, DateTimeKind.Utc);
         return new MajorWaveSnapshot(
@@ -1783,7 +2527,8 @@ internal static class Program
             baseFailureScore: baseFailureScore,
             isCatastrophic: isCatastrophic ?? survivingCount == 0,
             startedAt: start,
-            evaluatedAt: evaluatedAt);
+            evaluatedAt: evaluatedAt,
+            completedAt: completedAt);
     }
 
     private static void AssertReadOnly<T>(IReadOnlyList<T> values, string message)

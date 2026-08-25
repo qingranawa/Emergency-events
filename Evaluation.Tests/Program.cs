@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using EmergencyEvents.Crisis;
 using EmergencyEvents.Crisis.Detectors;
+using EmergencyEvents.Director;
+using EmergencyEvents.Director.TestEvents;
 using EmergencyEvents.Disorder;
 using EmergencyEvents.Evaluation;
 using EmergencyEvents.RemoteAdminCommands;
@@ -145,7 +148,52 @@ internal static class Program
             ("FDI 近期 Combat Transient 不被当前 MTF 存量吞掉", FdiRecentCombatTransientSurvivesCurrentStock),
             ("FDI 079 SYS 升级链只保留一个非零 Delta", Fdi079SysUpgradeChainHasOneNonZeroDelta),
             ("FDI 079 SYS 移除链只保留一个非零 Delta", Fdi079SysRemovalChainHasOneNonZeroDelta),
-        };
+            ("M05 EventDefinition 只声明一个 L0-L5 响应等级", DirectorDefinitionDeclaresOneResponseLevel),
+            ("M05 多危机标签按 AND 条件保存", DirectorDefinitionPreservesCrisisAndRequirements),
+            ("M05 人员计划按人口档位可读", DirectorDefinitionExposesTierPersonnelPlan),
+            ("M05 DirectorContext 保留官方上下游事实", DirectorContextPreservesOfficialFacts),
+            ("M05 临时配置默认关闭并使用 SKIP", DirectorConfigUsesSafeProvisionalDefaults),
+            ("M05 EventRegistry 拒绝重复并保持确定顺序", DirectorRegistryRejectsDuplicateAndSorts),
+            ("M05 Fake Event Definitions 默认关闭且覆盖测试矩阵", DirectorFakeDefinitionsAreDisabledAndComplete),
+            ("M05 专业响应按 Episode 和 Severity 去重", DirectorProfessionalResponseTracksEpisodes),
+            ("M05 危机完全解除后重新建立 Episode", DirectorProfessionalResponseStartsNewEpisodeAfterResolve),
+            ("M05 全局 L5 不越过 BIO 实际危机等级", DirectorEligibilityUsesActualCrisisSeverity),
+            ("M05 多危机标签必须全部满足", DirectorEligibilityRequiresAllCrisisTags),
+            ("M05 人员不足拒绝且可用人数只能缩减目标", DirectorEligibilityScalesPersonnelWithoutExpansion),
+            ("M05 DESTROYED 过滤地下事件", DirectorEligibilityFiltersDestroyedFacility),
+            ("M05 GOI 事件不默认要求 GOI 危机", DirectorEligibilityDoesNotRequireImplicitGoiCrisis),
+            ("M05 专业危机响应优先于普通来源仲裁", DirectorProfessionalCandidateHasPriority),
+            ("M05 没有合法候选的 Chaos 来源被移除", DirectorArbitrationRemovesIllegalSource),
+            ("M05 单一普通候选直接选择", DirectorSingleCandidateSelectsDirectly),
+            ("M05 Foundation 多候选要求 O4 且保留回退", DirectorFoundationSelectionRequiresO4WithFallback),
+            ("M05 Chaos 和 GOI 候选自动选择", DirectorChaosAndGoiSelectAutomatically),
+            ("M05 FDI 只影响普通 SUPPORT 来源仲裁", DirectorFdiOnlyInfluencesSupportArbitration),
+            ("M05 NON_SUPPORT 不读取 FDI", DirectorNonSupportIgnoresFdi),
+            ("M05 第一事件成功后第二槽位使用真实启动时间加 60 秒", DirectorSecondSlotUsesActualStartTime),
+            ("M05 第一事件延迟启动不使用计划时间", DirectorDelayedStartUsesActualStart),
+            ("M05 第一事件失败时 SKIP 且不伪造启动时间", DirectorFailedFirstEventSkipsSecondSlot),
+            ("M05 Scheduler 重复触发只保留一个第二槽位", DirectorSchedulerCoalescesDuplicateTrigger),
+            ("M05 忙碌保护拒绝重复周期", DirectorBusyProtectionRejectsDuplicateCycle),
+            ("M05 Event Cost 只在成功提交后记录", DirectorCostIsRecordedOnlyAfterCommit),
+            ("M05 专业响应在准备或启动失败时不消费", DirectorProfessionalResponseNotConsumedOnFailure),
+            ("M05 生命周期清理取消全部 Director 状态", DirectorCleanupClearsAllState),
+            ("M05 生命周期状态按顺序推进", DirectorLifecycleAdvancesInOrder),
+            ("M05 RuntimeContext 只读取 M01-M04.5 官方事实", DirectorRuntimeReadsOfficialFacts),
+            ("M05 POST_MAJOR_WAVE 不额外驱动 M03 评估", DirectorPostMajorWaveDoesNotReevaluateDlrc),
+            ("M05 MANUAL_RA 不创建 Director 周期", DirectorManualRaDoesNotCreateCycle),
+            ("M05 Round End/Restart/Waiting 清理 Director 生命周期", DirectorRuntimeCleansLifecycleBoundaries),
+            ("M05 低人口暂停不可逆", DirectorRuntimeLowPopulationSuspensionIsIrreversible),
+             ("M05 第二槽位严格使用 NON_SUPPORT", DirectorSecondSlotIsStrictlyNonSupport),
+             ("M05 候选拒绝和生命周期均生成诊断日志", DirectorLogsContainRejectAndLifecycleEvidence),
+             ("M05 PERIODIC/POST/MANUAL 只更新 Context 不创建周期", DirectorEvaluationTriggersOnlyUpdateContext),
+             ("M05 显式测试触发只创建一个周期", DirectorExplicitTriggerCreatesOneCycle),
+             ("M05 完成周期后允许下一周期且日志有界", DirectorCompletedCyclesHaveBoundedHistory),
+             ("M05 多危机专业选择标记临时策略", DirectorProfessionalSelectionIsProvisional),
+             ("M05 DueAt 取消后永不迟到执行", DirectorDueAtCancellationIsIrreversible),
+             ("M05 第二槽位到期只执行一次", DirectorSecondSlotExecutesOnlyOnce),
+             ("M05 来源仲裁 Seed 可重复", DirectorSeededSourceSelectionIsReproducible),
+             ("M05 来源权重非法值安全回退", DirectorInvalidSourceWeightsUseStableFallback),
+         };
 
         string requestedModule = args.Length == 0 ? "ALL" : args[0].ToUpperInvariant();
         int total = 0;
@@ -153,7 +201,9 @@ internal static class Program
 
         for (int index = 0; index < tests.Length; index++)
         {
-            string module = tests[index].Name.StartsWith("FDI", StringComparison.Ordinal)
+            string module = tests[index].Name.StartsWith("M05", StringComparison.Ordinal)
+                ? "M05"
+                : tests[index].Name.StartsWith("FDI", StringComparison.Ordinal)
                 ? "FDI"
                 : index < 43 ? "M03" : index < 46 ? "M01" : index < 71 ? "M02" : "M04";
             bool isRaTest = tests[index].Name.StartsWith("RA ", StringComparison.Ordinal)
@@ -1452,6 +1502,76 @@ internal static class Program
         return new CrisisAssessment(snapshot.RoundId, DlrcEvaluationTrigger.PERIODIC, snapshot, result, detections);
     }
 
+    private static CrisisAssessment CreateDirectorAssessment(
+        RoundSnapshot snapshot,
+        DlrcEvaluationResult result,
+        params (CrisisTag Tag, CrisisSeverity Severity)[] activeTags)
+    {
+        List<CrisisDetectionResult> detections = new List<CrisisDetectionResult>();
+        foreach ((CrisisTag tag, CrisisSeverity severity) in activeTags)
+        {
+            detections.Add(new CrisisDetectionResult(tag, true, severity, "director-test"));
+        }
+
+        return new CrisisAssessment(snapshot.RoundId, DlrcEvaluationTrigger.PERIODIC, snapshot, result, detections);
+    }
+
+    private static DirectorContext CreateDirectorContext(
+        DlrcEvaluationResult result,
+        CrisisAssessment? assessment,
+        int foundationAvailable = 6,
+        int chaosAvailable = 6,
+        int goiAvailable = 6,
+        int eligibleSpectators = 6,
+        FacilityState facilityState = FacilityState.Normal,
+        FacilityDisorderBand facilityDisorderBand = FacilityDisorderBand.LOW)
+    {
+        return new DirectorContext(
+            result.RoundId,
+            result.Timestamp,
+            result.PopulationTier,
+            result,
+            assessment,
+            null,
+            null,
+            null,
+            null,
+            new DirectorPersonnelFacts(
+                foundationAvailable,
+                chaosAvailable,
+                goiAvailable,
+                eligibleSpectators,
+                overwatchCount: 0,
+                totalOnline: 20),
+            facilityState,
+            hasO4Selector: true,
+            facilityDisorderBand);
+    }
+
+    private static EventDefinition CreateDirectorDefinitionWithCrisis(
+        string eventId,
+        EventResponseLevel level,
+        CrisisSeverity severity,
+        IReadOnlyList<CrisisTag> tags,
+        EventSource source,
+        bool requiresUndergroundFacility = false)
+    {
+        return new EventDefinition(
+            eventId,
+            eventId,
+            EventCategory.Support,
+            source,
+            level,
+            tags,
+            severity,
+            TierPersonnelPlan.Uniform(6),
+            TierPersonnelPlan.Uniform(2),
+            isEnabled: true,
+            priority: 10,
+            weight: 1d,
+            requiresUndergroundFacility);
+    }
+
     private static FacilityDisorderStockSnapshot CreateStock(RoundSnapshot snapshot, CrisisAssessment? assessment)
     {
         return new FacilityDisorderStockSnapshot(
@@ -1498,6 +1618,865 @@ internal static class Program
     private static CrisisDetectionResult Detect(ICrisisDetector detector, RoundSnapshot snapshot, CrisisState state)
     {
         return detector.Detect(snapshot, CreateResult(snapshot), state, new CrisisContext());
+    }
+
+    private static void DirectorDefinitionDeclaresOneResponseLevel()
+    {
+        EventDefinition definition = new EventDefinition(
+            "test-bio-l3",
+            "Test BIO L3",
+            EventCategory.Support,
+            EventSource.ProfessionalCrisisResponse,
+            EventResponseLevel.L3,
+            new[] { CrisisTag.BIO },
+            CrisisSeverity.Level3,
+            TierPersonnelPlan.Uniform(4),
+            TierPersonnelPlan.Uniform(2),
+            isEnabled: true,
+            priority: 10,
+            weight: 1d,
+            requiresUndergroundFacility: false);
+
+        AssertEqual(EventResponseLevel.L3, definition.RequiredResponseLevel, "事件必须声明唯一的 L3 响应等级");
+        AssertEqual(EventCategory.Support, definition.Category, "事件类别必须保留为 SUPPORT");
+        AssertEqual(EventSource.ProfessionalCrisisResponse, definition.Source, "专业响应来源必须保留");
+    }
+
+    private static void DirectorDefinitionPreservesCrisisAndRequirements()
+    {
+        EventDefinition definition = new EventDefinition(
+            "test-bio-sys",
+            "Test BIO SYS",
+            EventCategory.Support,
+            EventSource.ProfessionalCrisisResponse,
+            EventResponseLevel.L4,
+            new[] { CrisisTag.BIO, CrisisTag.SYS },
+            CrisisSeverity.Level4,
+            TierPersonnelPlan.Uniform(4),
+            TierPersonnelPlan.Uniform(2),
+            isEnabled: true,
+            priority: 10,
+            weight: 1d,
+            requiresUndergroundFacility: false);
+
+        AssertSequence(new[] { CrisisTag.BIO, CrisisTag.SYS }, definition.RequiredCrisisTags, "多危机标签必须完整保留，后续资格判断才可以执行 AND");
+        AssertEqual(CrisisSeverity.Level4, definition.RequiredCrisisSeverity, "多标签事件的最低危机严重度必须保留");
+    }
+
+    private static void DirectorDefinitionExposesTierPersonnelPlan()
+    {
+        EventDefinition definition = new EventDefinition(
+            "test-tier-plan",
+            "Test Tier Plan",
+            EventCategory.Support,
+            EventSource.Foundation,
+            EventResponseLevel.L2,
+            Array.Empty<CrisisTag>(),
+            CrisisSeverity.Inactive,
+            new TierPersonnelPlan(2, 3, 4, 5, 6),
+            new TierPersonnelPlan(1, 1, 2, 2, 3),
+            isEnabled: true,
+            priority: 1,
+            weight: 1d,
+            requiresUndergroundFacility: false);
+
+        AssertEqual(6, definition.GetTargetPersonnel(PopulationTier.A), "A 档 target 必须可读");
+        AssertEqual(1, definition.GetMinimumPersonnel(PopulationTier.D), "D 档 minimum 必须可读");
+        AssertTrue(definition.GetTargetPersonnel(PopulationTier.C) >= definition.GetMinimumPersonnel(PopulationTier.C), "每档 target 不得低于 minimum");
+    }
+
+    private static void DirectorContextPreservesOfficialFacts()
+    {
+        DirectorPersonnelFacts personnel = new DirectorPersonnelFacts(6, 4, 2, 8, 1, 12);
+        DirectorContext context = new DirectorContext(
+            roundId: 77,
+            timestamp: Utc(6, 31),
+            populationTier: PopulationTier.D,
+            dlrcResult: null,
+            crisisAssessment: null,
+            facilityDisorder: null,
+            currentWave: null,
+            lastMajorWave: null,
+            previousMajorWave: null,
+            personnel: personnel,
+            facilityState: FacilityState.Lockdown,
+            hasO4Selector: true);
+
+        AssertEqual(77L, context.RoundId, "DirectorContext 必须保留 RoundId");
+        AssertEqual(PopulationTier.D, context.PopulationTier, "DirectorContext 必须保留锁定人口档位");
+        AssertEqual(6, context.Personnel.FoundationAvailable, "DirectorContext 必须保留 Foundation 人员事实");
+        AssertEqual(FacilityState.Lockdown, context.FacilityState, "DirectorContext 必须保留 FacilityState");
+        AssertTrue(context.HasO4Selector, "DirectorContext 必须保留 O4 边界能力");
+    }
+
+    private static void DirectorConfigUsesSafeProvisionalDefaults()
+    {
+        EventDirectorConfig config = new EventDirectorConfig();
+
+        AssertTrue(!config.Enabled, "Module 05 默认不得自动启动尚未存在的生产事件");
+        AssertEqual(SecondSlotWithoutSuccessfulFirstEventPolicy.Skip, config.SecondSlotFailurePolicy, "第二槽位默认必须 SKIP");
+        AssertEqual(60, config.SecondSlotDelaySeconds, "第二槽位临时默认延迟必须是 60 秒");
+        AssertTrue(config.FoundationWeight > 0d && config.ChaosWeight > 0d && config.GoiWeight > 0d, "来源仲裁临时权重必须是正数");
+    }
+
+    private static void DirectorRegistryRejectsDuplicateAndSorts()
+    {
+        EventRegistry registry = new EventRegistry();
+        EventDefinition high = CreateDirectorDefinition("z-test", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L2, 2);
+        EventDefinition low = CreateDirectorDefinition("a-test", EventCategory.NonSupport, EventSource.Internal, EventResponseLevel.L1, 1);
+
+        AssertTrue(registry.Register(high), "首次注册必须成功");
+        AssertTrue(registry.Register(low), "不同 ID 注册必须成功");
+        AssertTrue(!registry.Register(high), "重复 EventId 必须被拒绝");
+        AssertSequence(new[] { "a-test", "z-test" }, registry.All.Select(definition => definition.EventId).ToArray(), "注册表输出必须按 EventId 确定排序");
+    }
+
+    private static void DirectorFakeDefinitionsAreDisabledAndComplete()
+    {
+        IReadOnlyList<EventDefinition> definitions = TestEventDefinitions.CreateDefaults();
+
+        AssertTrue(definitions.Count >= 8, "Fake Definitions 必须覆盖专业 BIO、Foundation、Chaos、GOI 与 NON_SUPPORT");
+        AssertTrue(definitions.All(definition => !definition.IsEnabled), "Phase 1 Fake Definitions 默认必须关闭");
+        AssertTrue(definitions.Any(definition => definition.Source == EventSource.ProfessionalCrisisResponse && definition.RequiredCrisisSeverity == CrisisSeverity.Level3), "必须存在 BIO L3 专业响应定义");
+        AssertTrue(definitions.Any(definition => definition.Category == EventCategory.NonSupport), "必须存在 NON_SUPPORT 测试定义");
+        AssertEqual(definitions.Count, definitions.Select(definition => definition.EventId).Distinct(StringComparer.Ordinal).Count(), "Fake Definitions 的 EventId 必须唯一");
+    }
+
+    private static void DirectorProfessionalResponseTracksEpisodes()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 501);
+        ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
+        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG), (CrisisTag.BIO, CrisisSeverity.Level3)));
+
+        AssertTrue(tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level3), "新 BIO Episode 的 L3 必须可消费");
+        AssertTrue(tracker.Consume(CrisisTag.BIO, CrisisSeverity.Level3, "cycle-1"), "成功提交后必须消费 L3");
+        AssertTrue(!tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level3), "同一 Episode 同一 Severity 不得重复消费");
+
+        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG), (CrisisTag.BIO, CrisisSeverity.Level4)));
+        AssertTrue(tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level4), "同一 Episode 的升级 L4 必须独立可消费");
+    }
+
+    private static void DirectorProfessionalResponseStartsNewEpisodeAfterResolve()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 502);
+        ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
+        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG), (CrisisTag.BIO, CrisisSeverity.Level3)));
+        AssertTrue(tracker.Consume(CrisisTag.BIO, CrisisSeverity.Level3, "cycle-1"), "首个 Episode 必须可消费");
+
+        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG)));
+        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG), (CrisisTag.BIO, CrisisSeverity.Level3)));
+
+        AssertTrue(tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level3), "完全解除后再次激活必须建立新 Episode");
+        AssertTrue(tracker.EpisodeId >= 2, "新 Episode 必须具有新的序号");
+    }
+
+    private static void DirectorEligibilityUsesActualCrisisSeverity()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 503);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 5, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
+        DirectorContext context = CreateDirectorContext(result, assessment, foundationAvailable: 6);
+        ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
+        tracker.Observe(assessment);
+
+        EventCandidate candidate = new EventEligibilityService().Evaluate(
+            context,
+            CreateDirectorDefinitionWithCrisis("bio-l4", EventResponseLevel.L4, CrisisSeverity.Level4, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse),
+            tracker);
+
+        AssertTrue(!candidate.IsLegal, "全局 L5 不能越过当前 BIO L3 直接选择 BIO L4");
+        AssertTrue(candidate.Reason.Contains("Crisis", StringComparison.OrdinalIgnoreCase), "拒绝理由必须明确指出危机条件");
+    }
+
+    private static void DirectorEligibilityRequiresAllCrisisTags()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 504);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 5, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
+        DirectorContext context = CreateDirectorContext(result, assessment, foundationAvailable: 6);
+        ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
+        tracker.Observe(assessment);
+
+        EventCandidate candidate = new EventEligibilityService().Evaluate(
+            context,
+            CreateDirectorDefinitionWithCrisis("bio-sys", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.BIO, CrisisTag.SYS }, EventSource.ProfessionalCrisisResponse),
+            tracker);
+
+        AssertTrue(!candidate.IsLegal, "BIO+SYS 事件缺少 SYS 时必须拒绝，而不是按 OR 通过");
+    }
+
+    private static void DirectorEligibilityScalesPersonnelWithoutExpansion()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 505);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        DirectorContext context = CreateDirectorContext(result, null, foundationAvailable: 3);
+        EventDefinition definition = new EventDefinition(
+            "foundation-scale",
+            "Foundation Scale",
+            EventCategory.Support,
+            EventSource.Foundation,
+            EventResponseLevel.L2,
+            Array.Empty<CrisisTag>(),
+            CrisisSeverity.Inactive,
+            TierPersonnelPlan.Uniform(6),
+            TierPersonnelPlan.Uniform(2),
+            isEnabled: true,
+            priority: 1,
+            weight: 1d,
+            requiresUndergroundFacility: false);
+
+        EventCandidate candidate = new EventEligibilityService().Evaluate(context, definition, new ProfessionalResponseTracker());
+
+        AssertTrue(candidate.IsLegal, "最低人数满足时事件必须合法");
+        AssertEqual(3, candidate.PlannedPersonnel, "可用人数不足 target 时只能缩减到可用人数");
+        AssertTrue(candidate.PlannedPersonnel <= candidate.RequestedPersonnel, "Director 不得扩充原生可用名单");
+    }
+
+    private static void DirectorEligibilityFiltersDestroyedFacility()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 506);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        DirectorContext context = CreateDirectorContext(result, null, facilityState: FacilityState.Destroyed, foundationAvailable: 6);
+        EventDefinition definition = CreateDirectorDefinitionWithCrisis("underground", EventResponseLevel.L2, CrisisSeverity.Inactive, Array.Empty<CrisisTag>(), EventSource.Foundation, requiresUndergroundFacility: true);
+
+        EventCandidate candidate = new EventEligibilityService().Evaluate(context, definition, new ProfessionalResponseTracker());
+
+        AssertTrue(!candidate.IsLegal, "DESTROYED 设施不得选择要求地下设施的事件");
+    }
+
+    private static void DirectorEligibilityDoesNotRequireImplicitGoiCrisis()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 507);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        DirectorContext context = CreateDirectorContext(result, null, goiAvailable: 3);
+        EventDefinition definition = CreateDirectorDefinitionWithCrisis("goi-normal", EventResponseLevel.L2, CrisisSeverity.Inactive, Array.Empty<CrisisTag>(), EventSource.Goi);
+
+        EventCandidate candidate = new EventEligibilityService().Evaluate(context, definition, new ProfessionalResponseTracker());
+
+        AssertTrue(candidate.IsLegal, "定义未声明 GOI 危机时，GOI 危机不得成为隐含前置条件");
+    }
+
+    private static void DirectorProfessionalCandidateHasPriority()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 508);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
+        DirectorContext context = CreateDirectorContext(result, assessment);
+        ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
+        tracker.Observe(assessment);
+        EventCandidate professional = new EventEligibilityService().Evaluate(context, CreateDirectorDefinitionWithCrisis("professional", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse), tracker);
+        EventCandidate ordinary = new EventEligibilityService().Evaluate(context, CreateDirectorDefinition("ordinary", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1), tracker);
+
+        SelectionDecision? decision = new EventSelectionService(new SupportSourceArbitrator(new EventDirectorConfig())).SelectSupport(context, new[] { professional, ordinary }, tracker);
+
+        AssertTrue(decision is not null && decision.Candidate == professional, "合法专业响应必须先于普通来源仲裁");
+    }
+
+    private static void DirectorArbitrationRemovesIllegalSource()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 509);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        DirectorContext context = CreateDirectorContext(result, null, chaosAvailable: 0, foundationAvailable: 4);
+        EventEligibilityService eligibility = new EventEligibilityService();
+        EventCandidate illegalChaos = eligibility.Evaluate(context, CreateDirectorDefinition("chaos", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 5), new ProfessionalResponseTracker());
+        EventCandidate foundation = eligibility.Evaluate(context, CreateDirectorDefinition("foundation", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L2, 1), new ProfessionalResponseTracker());
+
+        IReadOnlyList<EventSource> sources = new SupportSourceArbitrator(new EventDirectorConfig()).GetEligibleSources(context, new[] { illegalChaos, foundation });
+
+        AssertTrue(!sources.Contains(EventSource.Chaos), "没有合法 Chaos 候选时必须移除 Chaos 来源");
+        AssertTrue(sources.Contains(EventSource.Foundation), "仍有合法候选的 Foundation 来源必须保留");
+    }
+
+    private static void DirectorSingleCandidateSelectsDirectly()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 510);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        DirectorContext context = CreateDirectorContext(result, null, chaosAvailable: 4);
+        EventCandidate candidate = new EventEligibilityService().Evaluate(context, CreateDirectorDefinition("chaos-only", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1), new ProfessionalResponseTracker());
+
+        SelectionDecision? decision = new EventSelectionService(new SupportSourceArbitrator(new EventDirectorConfig())).SelectSupport(context, new[] { candidate }, new ProfessionalResponseTracker());
+
+        AssertTrue(decision is not null && decision.Candidate == candidate, "单一合法候选必须直接选中");
+        AssertTrue(!decision!.O4SelectionRequired, "单一候选不得要求 O4");
+    }
+
+    private static void DirectorFoundationSelectionRequiresO4WithFallback()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 511);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        DirectorContext context = CreateDirectorContext(result, null, foundationAvailable: 6);
+        EventEligibilityService eligibility = new EventEligibilityService();
+        EventCandidate first = eligibility.Evaluate(context, CreateDirectorDefinition("foundation-a", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L2, 10), new ProfessionalResponseTracker());
+        EventCandidate second = eligibility.Evaluate(context, CreateDirectorDefinition("foundation-b", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L2, 5), new ProfessionalResponseTracker());
+
+        SelectionDecision? decision = new EventSelectionService(new SupportSourceArbitrator(new EventDirectorConfig())).SelectSupport(context, new[] { first, second }, new ProfessionalResponseTracker());
+
+        AssertTrue(decision is not null && decision.O4SelectionRequired, "Foundation 多候选必须标记 O4SelectionRequired");
+        AssertTrue(decision!.HasFallback && decision.Candidate == first, "Foundation 多候选必须有确定性回退");
+    }
+
+    private static void DirectorChaosAndGoiSelectAutomatically()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 512);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        DirectorContext context = CreateDirectorContext(result, null, chaosAvailable: 6, goiAvailable: 6);
+        EventEligibilityService eligibility = new EventEligibilityService();
+        EventCandidate chaos = eligibility.Evaluate(context, CreateDirectorDefinition("chaos-auto", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 10), new ProfessionalResponseTracker());
+        EventCandidate goi = eligibility.Evaluate(context, CreateDirectorDefinition("goi-auto", EventCategory.Support, EventSource.Goi, EventResponseLevel.L2, 1), new ProfessionalResponseTracker());
+
+        SelectionDecision? decision = new EventSelectionService(new SupportSourceArbitrator(new EventDirectorConfig())).SelectSupport(context, new[] { chaos, goi }, new ProfessionalResponseTracker());
+
+        AssertTrue(decision is not null && !decision.O4SelectionRequired && decision.HasFallback, "Chaos/GOI 必须自动选择且保留确定性回退");
+    }
+
+    private static void DirectorFdiOnlyInfluencesSupportArbitration()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 513);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        DirectorContext lowDisorder = CreateDirectorContext(result, null, foundationAvailable: 6, chaosAvailable: 6, facilityDisorderBand: FacilityDisorderBand.LOW);
+        DirectorContext highDisorder = CreateDirectorContext(result, null, foundationAvailable: 6, chaosAvailable: 6, facilityDisorderBand: FacilityDisorderBand.HIGH);
+        EventEligibilityService eligibility = new EventEligibilityService();
+        EventCandidate foundationLow = eligibility.Evaluate(lowDisorder, CreateDirectorDefinition("foundation", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L2, 1), new ProfessionalResponseTracker());
+        EventCandidate chaosLow = eligibility.Evaluate(lowDisorder, CreateDirectorDefinition("chaos", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1), new ProfessionalResponseTracker());
+        EventCandidate foundationHigh = eligibility.Evaluate(highDisorder, CreateDirectorDefinition("foundation", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L2, 1), new ProfessionalResponseTracker());
+        EventCandidate chaosHigh = eligibility.Evaluate(highDisorder, CreateDirectorDefinition("chaos", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1), new ProfessionalResponseTracker());
+        SupportSourceArbitrator arbitrator = new SupportSourceArbitrator(new EventDirectorConfig(), new DeterministicRandomSource(0.5d));
+
+        EventSource? lowSource = arbitrator.SelectOrdinarySource(lowDisorder, new[] { foundationLow, chaosLow });
+        EventSource? highSource = arbitrator.SelectOrdinarySource(highDisorder, new[] { foundationHigh, chaosHigh });
+
+        AssertEqual(EventSource.Chaos, lowSource, "LOW FDI 的临时仲裁权重应偏向 Chaos");
+        AssertEqual(EventSource.Foundation, highSource, "HIGH FDI 的临时仲裁权重应偏向 Foundation");
+    }
+
+    private static void DirectorNonSupportIgnoresFdi()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 514);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        DirectorContext low = CreateDirectorContext(result, null, facilityDisorderBand: FacilityDisorderBand.LOW);
+        DirectorContext high = CreateDirectorContext(result, null, facilityDisorderBand: FacilityDisorderBand.HIGH);
+        EventEligibilityService eligibility = new EventEligibilityService();
+        EventCandidate lowCandidate = eligibility.Evaluate(low, CreateDirectorDefinition("non-support", EventCategory.NonSupport, EventSource.Internal, EventResponseLevel.L2, 1), new ProfessionalResponseTracker());
+        EventCandidate highCandidate = eligibility.Evaluate(high, CreateDirectorDefinition("non-support", EventCategory.NonSupport, EventSource.Internal, EventResponseLevel.L2, 1), new ProfessionalResponseTracker());
+        EventSelectionService selection = new EventSelectionService(new SupportSourceArbitrator(new EventDirectorConfig()));
+
+        SelectionDecision? lowDecision = selection.SelectNonSupport(low, new[] { lowCandidate });
+        SelectionDecision? highDecision = selection.SelectNonSupport(high, new[] { highCandidate });
+
+        AssertTrue(lowDecision is not null && highDecision is not null, "NON_SUPPORT 合法候选必须可选择");
+        AssertEqual(lowDecision!.Candidate.Definition.EventId, highDecision!.Candidate.Definition.EventId, "NON_SUPPORT 选择不得因 FDI 改变");
+    }
+
+    private static void DirectorSecondSlotUsesActualStartTime()
+    {
+        DateTime planned = Utc(10, 0);
+        DateTime actualStart = planned.AddSeconds(17);
+        EventDirector director = CreateDirectorForLifecycle(CreateDirectorDefinition("first", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1));
+        DirectorCycle cycle = SelectDirectorCycle(director, 601, planned);
+        AdvanceDirectorToPrepared(director);
+
+        AssertTrue(director.Advance(EventLifecycleState.Started, true, actualStart), "第一事件必须进入 Started");
+        AssertTrue(director.Commit(cycle.SelectedSupport!, DirectorSlot.Support, actualStart.AddSeconds(4)), "第一事件提交必须成功");
+        AssertEqual(actualStart.AddSeconds(60), cycle.SecondSlotDueAt, "第二槽位必须基于真实启动时间而不是计划时间");
+    }
+
+    private static void DirectorDelayedStartUsesActualStart()
+    {
+        DateTime planned = Utc(11, 0);
+        DateTime actualStart = planned.AddMinutes(2);
+        EventDirector director = CreateDirectorForLifecycle(CreateDirectorDefinition("delayed", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1));
+        DirectorCycle cycle = SelectDirectorCycle(director, 602, planned);
+        AdvanceDirectorToPrepared(director);
+
+        AssertTrue(director.Advance(EventLifecycleState.Started, true, actualStart), "延迟事件必须记录真实 Started");
+        AssertTrue(director.Commit(cycle.SelectedSupport!, DirectorSlot.Support, actualStart), "延迟事件提交必须成功");
+        AssertEqual(actualStart.AddSeconds(60), cycle.SecondSlotDueAt, "延迟启动不得沿用 ScheduledAt");
+    }
+
+    private static void DirectorFailedFirstEventSkipsSecondSlot()
+    {
+        EventDirector director = CreateDirectorForLifecycle(CreateDirectorDefinition("failed", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1));
+        DirectorCycle cycle = SelectDirectorCycle(director, 603, Utc(12, 0));
+
+        AssertTrue(director.Advance(EventLifecycleState.Prepared, false), "Prepare 失败必须进入失败状态");
+        AssertEqual(EventLifecycleState.Failed, cycle.State, "失败事件状态必须是 Failed");
+        AssertTrue(!cycle.ActualFirstSlotStartedAt.HasValue, "失败事件不得伪造实际启动时间");
+        AssertTrue(!cycle.SecondSlotDueAt.HasValue, "第一事件失败时默认 SKIP，不得安排第二槽位");
+        AssertTrue(director.Advance(EventLifecycleState.RolledBack, true), "失败后必须允许显式 Rollback");
+        AssertEqual(EventLifecycleState.RolledBack, cycle.State, "显式回滚后状态必须是 RolledBack");
+    }
+
+    private static void DirectorSchedulerCoalescesDuplicateTrigger()
+    {
+        EventDirectorScheduler scheduler = new EventDirectorScheduler(new EventDirectorConfig());
+        DateTime start = Utc(13, 0);
+
+        AssertTrue(scheduler.ScheduleSecondSlot(604, start), "首次第二槽位调度必须成功");
+        AssertTrue(!scheduler.ScheduleSecondSlot(604, start.AddSeconds(10)), "同一周期重复调度必须被合并");
+        AssertEqual(start.AddSeconds(60), scheduler.SecondSlotDueAt, "重复触发不得覆盖原有 due time");
+        AssertTrue(scheduler.TryConsumeDueSlot(start.AddSeconds(60)), "到期后必须只消费一次");
+        AssertTrue(!scheduler.TryConsumeDueSlot(start.AddSeconds(60)), "第二次到期触发不得再次消费");
+    }
+
+    private static void DirectorBusyProtectionRejectsDuplicateCycle()
+    {
+        EventDirector director = CreateDirectorForLifecycle(CreateDirectorDefinition("busy", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1));
+        DirectorContext context = CreateDirectorContext(CreateCrisisResult(CreateSnapshot(roundId: 605), 3, FoundationStrength.STRONG), null);
+
+        AssertTrue(director.SelectCycle(context) is not null, "首个周期必须可创建");
+        AssertTrue(director.SelectCycle(context) is null, "周期未完成时重复 Select 必须被 busy guard 拒绝");
+    }
+
+    private static void DirectorCostIsRecordedOnlyAfterCommit()
+    {
+        RecordingEventCostBoundary cost = new RecordingEventCostBoundary();
+        EventDirector director = CreateDirectorForLifecycle(CreateDirectorDefinition("cost", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1), cost);
+        DirectorCycle cycle = SelectDirectorCycle(director, 606, Utc(14, 0));
+        AdvanceDirectorToPrepared(director);
+
+        AssertEqual(0, cost.Count, "Scheduled/Selected/Prepared 阶段不得记录成本");
+        director.Advance(EventLifecycleState.Started, true, Utc(14, 10));
+        AssertEqual(0, cost.Count, "Started 尚未 Commit 时不得记录成本");
+        AssertTrue(director.Commit(cycle.SelectedSupport!, DirectorSlot.Support, Utc(14, 11)), "Commit 必须成功");
+        AssertEqual(1, cost.Count, "成功 Commit 后必须只记录一次成本");
+        AssertTrue(!director.Commit(cycle.SelectedSupport!, DirectorSlot.Support, Utc(14, 12)), "重复 Commit 不得重复记录成本");
+        AssertEqual(1, cost.Count, "重复 Commit 不得重复成本");
+    }
+
+    private static void DirectorProfessionalResponseNotConsumedOnFailure()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 607);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
+        EventDefinition definition = CreateDirectorDefinitionWithCrisis("professional-fail", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse);
+        EventDirector director = CreateDirectorForLifecycle(definition);
+        DirectorCycle cycle = director.SelectCycle(CreateDirectorContext(result, assessment))!;
+
+        AssertTrue(director.Advance(EventLifecycleState.Prepared, false), "专业事件 Prepare 失败必须进入 Failed");
+        AssertTrue(director.Tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level3), "Prepare 失败不得消费专业响应");
+        AssertTrue(cycle.SelectedSupport is not null, "失败前仍应保留候选诊断信息");
+    }
+
+    private static void DirectorCleanupClearsAllState()
+    {
+        EventDirector director = CreateDirectorForLifecycle(CreateDirectorDefinition("cleanup", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1));
+        DirectorCycle cycle = SelectDirectorCycle(director, 608, Utc(15, 0));
+        AdvanceDirectorToPrepared(director);
+        director.Advance(EventLifecycleState.Started, true, Utc(15, 5));
+        director.Commit(cycle.SelectedSupport!, DirectorSlot.Support, Utc(15, 6));
+
+        director.CleanupRound();
+
+        AssertTrue(!director.IsBusy, "Round cleanup 必须清除 busy 状态");
+        AssertTrue(director.CurrentCycle is null, "Round cleanup 必须清除当前周期");
+        AssertTrue(!director.Scheduler.SecondSlotDueAt.HasValue, "Round cleanup 必须取消第二槽位");
+        AssertEqual(0L, director.Tracker.EpisodeId, "Round cleanup 必须清除专业 Episode");
+    }
+
+    private static void DirectorLifecycleAdvancesInOrder()
+    {
+        EventDirector director = CreateDirectorForLifecycle(CreateDirectorDefinition("lifecycle", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1));
+        DirectorCycle cycle = SelectDirectorCycle(director, 609, Utc(16, 0));
+
+        AssertEqual(EventLifecycleState.Selected, cycle.State, "选择完成后必须是 Selected");
+        AssertTrue(director.Advance(EventLifecycleState.Prepared, true), "Selected -> Prepared 必须成功");
+        AssertTrue(director.Advance(EventLifecycleState.Started, true, Utc(16, 5)), "Prepared -> Started 必须成功");
+        AssertEqual(EventLifecycleState.Started, cycle.State, "启动后必须是 Started");
+        AssertTrue(director.Commit(cycle.SelectedSupport!, DirectorSlot.Support, Utc(16, 6)), "Started -> Committed 必须成功");
+        AssertEqual(EventLifecycleState.Committed, cycle.State, "提交后必须是 Committed");
+    }
+
+    private static void DirectorRuntimeReadsOfficialFacts()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 610, populationTier: PopulationTier.D, timestamp: Utc(17, 0));
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
+        MajorWaveHistory history = new MajorWaveHistory();
+        MajorWaveRecord wave = history.Record("runtime-wave", "Chaos", PopulationTier.D, 4, new[] { 1, 2, 3, 4 }, snapshot.Timestamp, snapshot.Timestamp.AddSeconds(5));
+        FacilityDisorderState fdi = new FacilityDisorderState();
+        EventDirector director = new EventDirector(Array.Empty<EventDefinition>(), new EventDirectorConfig { Enabled = true });
+        EventDirectorRuntimeManager runtime = new EventDirectorRuntimeManager(director, minimumPlayers: 16);
+        runtime.StartRound(snapshot.RoundId, snapshot.PopulationTier);
+
+        runtime.HandleEvaluation(
+            new DlrcEvaluationCompletedEvent(610, DlrcEvaluationTrigger.PERIODIC, snapshot, result),
+            assessment,
+            fdi,
+            history.Records,
+            new DirectorPersonnelFacts(6, 4, 1, 8, 0, 20),
+            FacilityState.Lockdown,
+            hasO4Selector: true);
+
+        AssertTrue(runtime.LastContext is not null, "Runtime adapter 必须保存本次官方事实上下文");
+        AssertTrue(ReferenceEquals(result, runtime.LastContext!.DlrcResult), "DirectorContext 必须直接读取官方 D-LRC 结果");
+        AssertTrue(ReferenceEquals(assessment, runtime.LastContext.CrisisAssessment), "DirectorContext 必须直接读取官方危机评估");
+        AssertTrue(ReferenceEquals(wave, runtime.LastContext.LastMajorWave), "DirectorContext 必须读取 M02 波次事实");
+        AssertEqual(FacilityState.Lockdown, runtime.LastContext.FacilityState, "DirectorContext 必须读取设施事实");
+    }
+
+    private static void DirectorPostMajorWaveDoesNotReevaluateDlrc()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 611, timestamp: Utc(18, 0));
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        EventDirectorRuntimeManager runtime = new EventDirectorRuntimeManager(
+            new EventDirector(Array.Empty<EventDefinition>(), new EventDirectorConfig { Enabled = true }),
+            minimumPlayers: 16);
+        runtime.StartRound(snapshot.RoundId, snapshot.PopulationTier);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result);
+
+        runtime.HandleEvaluation(new DlrcEvaluationCompletedEvent(611, DlrcEvaluationTrigger.POST_MAJOR_WAVE, snapshot, result), assessment, null, Array.Empty<MajorWaveRecord>(), new DirectorPersonnelFacts(1, 1, 0, 4, 0, 20), FacilityState.Normal, false);
+
+        AssertEqual(1, runtime.ObservedEvaluationCount, "POST_MAJOR_WAVE 只能消费已经完成的评估事件，不得再调用 M03");
+        AssertEqual(0, runtime.CreatedCycleCount, "没有生产定义时 POST_MAJOR_WAVE 不应凭空创建 Director 事件");
+    }
+
+    private static void DirectorManualRaDoesNotCreateCycle()
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 612, timestamp: Utc(19, 0));
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        EventDefinition definition = CreateDirectorDefinition("manual-block", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1);
+        EventDirectorRuntimeManager runtime = new EventDirectorRuntimeManager(
+            new EventDirector(new[] { definition }, new EventDirectorConfig { Enabled = true }),
+            minimumPlayers: 16);
+        runtime.StartRound(snapshot.RoundId, snapshot.PopulationTier);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result);
+
+        runtime.HandleEvaluation(new DlrcEvaluationCompletedEvent(612, DlrcEvaluationTrigger.MANUAL_RA, snapshot, result), assessment, null, Array.Empty<MajorWaveRecord>(), new DirectorPersonnelFacts(1, 1, 0, 4, 0, 20), FacilityState.Normal, false);
+
+        AssertEqual(0, runtime.CreatedCycleCount, "MANUAL_RA D-LRC 评估不得创建 Director 周期");
+    }
+
+    private static void DirectorRuntimeCleansLifecycleBoundaries()
+    {
+        EventDirectorRuntimeManager runtime = new EventDirectorRuntimeManager(
+            new EventDirector(Array.Empty<EventDefinition>(), new EventDirectorConfig { Enabled = true }),
+            minimumPlayers: 16);
+        runtime.StartRound(613, PopulationTier.E);
+        runtime.SuspendForRound("test");
+        runtime.CleanupRound();
+
+        AssertTrue(!runtime.IsActive && !runtime.IsSuspended, "Round cleanup 必须清除 active/suspended 状态");
+        AssertTrue(runtime.LastContext is null, "Round cleanup 必须清除 Context");
+        AssertEqual(0, runtime.ObservedEvaluationCount, "Round cleanup 必须清除评估计数");
+    }
+
+    private static void DirectorRuntimeLowPopulationSuspensionIsIrreversible()
+    {
+        EventDirectorRuntimeManager runtime = new EventDirectorRuntimeManager(
+            new EventDirector(Array.Empty<EventDefinition>(), new EventDirectorConfig { Enabled = true }),
+            minimumPlayers: 16);
+        runtime.StartRound(614, PopulationTier.E);
+
+        AssertTrue(runtime.ObservePopulation(15), "低人口必须触发本回合暂停");
+        AssertTrue(runtime.IsSuspended, "低人口后必须进入不可逆暂停");
+        runtime.ObservePopulation(30);
+        runtime.StartRound(614, PopulationTier.E);
+        AssertTrue(runtime.IsSuspended && !runtime.IsActive, "人口恢复不得重新激活当前回合");
+    }
+
+    private static void DirectorSecondSlotIsStrictlyNonSupport()
+    {
+        EventDefinition support = CreateDirectorDefinition("slot-support", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L0, 10);
+        EventDefinition nonSupport = CreateDirectorDefinition("slot-nonsupport", EventCategory.NonSupport, EventSource.Internal, EventResponseLevel.L0, 10);
+        EventDirector director = CreateDirectorForLifecycle(new[] { support, nonSupport });
+        DirectorCycle cycle = SelectDirectorCycle(director, 615, Utc(20, 0));
+
+        AssertTrue(cycle.SelectedSupport is not null, "第一槽位必须选择 SUPPORT");
+        AssertTrue(cycle.SelectedNonSupport is not null, "第二槽位必须选择 NON_SUPPORT");
+        AssertEqual(EventCategory.NonSupport, cycle.SelectedNonSupport!.Category, "第二槽位不得承载 SUPPORT 候选");
+        AdvanceDirectorToPrepared(director);
+        DateTime startedAt = Utc(20, 5);
+        director.Advance(EventLifecycleState.Started, true, startedAt);
+        director.Commit(cycle.SelectedSupport!, DirectorSlot.Support, startedAt);
+        AssertTrue(director.TryBeginSecondSlot(startedAt.AddSeconds(60)), "第二槽位到期后必须可以启动");
+        AssertTrue(director.Advance(EventLifecycleState.Prepared, true), "第二槽位必须进入 Prepared");
+        AssertTrue(director.Advance(EventLifecycleState.Started, true, startedAt.AddSeconds(61)), "第二槽位必须进入 Started");
+        AssertTrue(director.Commit(cycle.SelectedNonSupport!, DirectorSlot.NonSupport, startedAt.AddSeconds(62)), "第二槽位提交必须成功");
+        AssertTrue(!director.Scheduler.SecondSlotDueAt.HasValue, "第二槽位消费后不得留下调度项");
+    }
+
+    private static void DirectorLogsContainRejectAndLifecycleEvidence()
+    {
+        EventDefinition disabled = new EventDefinition(
+            "disabled-log",
+            "disabled-log",
+            EventCategory.Support,
+            EventSource.Foundation,
+            EventResponseLevel.L0,
+            Array.Empty<CrisisTag>(),
+            CrisisSeverity.Inactive,
+            TierPersonnelPlan.Uniform(2),
+            TierPersonnelPlan.Uniform(1),
+            isEnabled: false,
+            priority: 1,
+            weight: 1d,
+            requiresUndergroundFacility: false);
+        EventDirector director = CreateDirectorForLifecycle(disabled);
+        DirectorContext context = CreateDirectorContext(CreateCrisisResult(CreateSnapshot(roundId: 616), 0, FoundationStrength.STRONG), null);
+
+        AssertTrue(director.SelectCycle(context) is null, "没有合法候选时不得创建空周期");
+        AssertTrue(director.Logs.Any(entry => !entry.IsLegal && entry.Reason.Contains("Disabled", StringComparison.OrdinalIgnoreCase)), "候选拒绝日志必须保留具体原因");
+
+        EventDefinition enabled = CreateDirectorDefinition("lifecycle-log", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L0, 1);
+        EventDirector lifecycle = CreateDirectorForLifecycle(enabled);
+        DirectorCycle cycle = SelectDirectorCycle(lifecycle, 617, Utc(21, 0));
+        AdvanceDirectorToPrepared(lifecycle);
+        lifecycle.Advance(EventLifecycleState.Started, true, Utc(21, 1));
+        lifecycle.Commit(cycle.SelectedSupport!, DirectorSlot.Support, Utc(21, 2));
+        AssertTrue(lifecycle.Logs.Any(entry => entry.State == EventLifecycleState.Committed && entry.IsLegal), "成功提交必须产生生命周期日志");
+    }
+
+    private static void DirectorEvaluationTriggersOnlyUpdateContext()
+    {
+        EventDefinition definition = CreateDirectorDefinition("periodic-no-cycle", EventCategory.NonSupport, EventSource.Internal, EventResponseLevel.L0, 1);
+        EventDirectorRuntimeManager runtime = new EventDirectorRuntimeManager(
+            new EventDirector(new[] { definition }, new EventDirectorConfig { Enabled = true, CadenceSeconds = 0 }),
+            minimumPlayers: 16);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 701, timestamp: Utc(22, 0));
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 0, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result);
+        runtime.StartRound(701, PopulationTier.E);
+
+        AssertTrue(!runtime.HandleEvaluation(
+            new DlrcEvaluationCompletedEvent(701, DlrcEvaluationTrigger.PERIODIC, snapshot, result),
+            assessment,
+            null,
+            Array.Empty<MajorWaveRecord>(),
+            new DirectorPersonnelFacts(0, 0, 0, 4, 0, 20),
+            FacilityState.Normal,
+            hasO4Selector: false), "PERIODIC 不得创建 Director 周期");
+        AssertTrue(!runtime.HandleEvaluation(
+            new DlrcEvaluationCompletedEvent(702, DlrcEvaluationTrigger.POST_MAJOR_WAVE, snapshot, result),
+            new CrisisAssessment(702, DlrcEvaluationTrigger.POST_MAJOR_WAVE, snapshot, result, Array.Empty<CrisisDetectionResult>()),
+            null,
+            Array.Empty<MajorWaveRecord>(),
+            new DirectorPersonnelFacts(0, 0, 0, 4, 0, 20),
+            FacilityState.Normal,
+            hasO4Selector: false), "POST_MAJOR_WAVE 不得创建 Director 周期");
+        AssertTrue(!runtime.HandleEvaluation(
+            new DlrcEvaluationCompletedEvent(703, DlrcEvaluationTrigger.MANUAL_RA, snapshot, result),
+            new CrisisAssessment(703, DlrcEvaluationTrigger.MANUAL_RA, snapshot, result, Array.Empty<CrisisDetectionResult>()),
+            null,
+            Array.Empty<MajorWaveRecord>(),
+            new DirectorPersonnelFacts(0, 0, 0, 4, 0, 20),
+            FacilityState.Normal,
+            hasO4Selector: false), "MANUAL_RA 不得创建 Director 周期");
+        AssertEqual(0, runtime.CreatedCycleCount, "D-LRC 触发路径不得创建生产周期");
+        AssertEqual(3, runtime.ObservedEvaluationCount, "三类评估都必须更新观察计数");
+        AssertTrue(runtime.LastContext is not null, "评估触发仍必须更新 Context");
+    }
+
+    private static void DirectorExplicitTriggerCreatesOneCycle()
+    {
+        EventDefinition definition = CreateDirectorDefinition("explicit-cycle", EventCategory.NonSupport, EventSource.Internal, EventResponseLevel.L0, 1);
+        EventDirectorRuntimeManager runtime = new EventDirectorRuntimeManager(
+            new EventDirector(new[] { definition }, new EventDirectorConfig { Enabled = true, CadenceSeconds = 0 }),
+            minimumPlayers: 16);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 704, timestamp: Utc(22, 10));
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 0, FoundationStrength.STRONG);
+        runtime.StartRound(704, PopulationTier.E);
+        runtime.HandleEvaluation(
+            new DlrcEvaluationCompletedEvent(704, DlrcEvaluationTrigger.PERIODIC, snapshot, result),
+            CreateDirectorAssessment(snapshot, result),
+            null,
+            Array.Empty<MajorWaveRecord>(),
+            new DirectorPersonnelFacts(0, 0, 0, 4, 0, 20),
+            FacilityState.Normal,
+            hasO4Selector: false);
+
+        AssertTrue(runtime.TryCreateExplicitCycle(), "显式测试触发必须创建周期");
+        AssertTrue(!runtime.TryCreateExplicitCycle(), "同一忙碌周期不得重复创建");
+        AssertEqual(1, runtime.CreatedCycleCount, "显式测试触发只能创建一个周期");
+    }
+
+    private static void DirectorCompletedCyclesHaveBoundedHistory()
+    {
+        EventDefinition definition = CreateDirectorDefinition("bounded-cycle", EventCategory.NonSupport, EventSource.Internal, EventResponseLevel.L0, 1);
+        EventDirector director = CreateDirectorForLifecycle(definition);
+        for (int index = 0; index < 1000; index++)
+        {
+            DirectorCycle cycle = SelectDirectorCycle(director, 705 + index, Utc(23, 0).AddSeconds(index));
+            AssertTrue(director.Advance(EventLifecycleState.Prepared, true), "周期必须进入 Prepared");
+            AssertTrue(director.Advance(EventLifecycleState.Started, true), "周期必须进入 Started");
+            AssertTrue(director.Commit(cycle.SelectedNonSupport!, DirectorSlot.NonSupport, Utc(23, 0).AddSeconds(index)), "周期必须提交");
+            AssertTrue(director.Advance(EventLifecycleState.Completed, true), "周期必须完成并释放 busy");
+        }
+
+        AssertTrue(!director.IsBusy, "完成周期后不得永久保持 busy");
+        AssertTrue(director.Logs.Count <= 256, "Director 日志必须有界");
+    }
+
+    private static void DirectorProfessionalSelectionIsProvisional()
+    {
+        EventDefinition bio = CreateDirectorDefinitionWithCrisis("professional-bio", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse);
+        EventDefinition sys = CreateDirectorDefinitionWithCrisis("professional-sys", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.SYS }, EventSource.ProfessionalCrisisResponse);
+        EventDirector director = CreateDirectorForLifecycle(new[] { bio, sys });
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 706);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3), (CrisisTag.SYS, CrisisSeverity.Level3));
+
+        DirectorCycle? cycle = director.SelectCycle(CreateDirectorContext(result, assessment));
+
+        AssertTrue(cycle is not null, "同时存在多个专业危机时必须选择一个候选");
+        AssertTrue(director.Logs.Any(entry => entry.Reason.Contains("PROVISIONAL", StringComparison.Ordinal)), "未定的专业危机优先级必须标记 PROVISIONAL");
+    }
+
+    private static void DirectorDueAtCancellationIsIrreversible()
+    {
+        DateTime dueAt = Utc(23, 30).AddSeconds(60);
+        string[] cancellationNames = { "RoundEnd", "Restart", "LowPopulation", "Disable", "RuntimeCleanup" };
+        foreach (string cancellationName in cancellationNames)
+        {
+            EventDirector director = CreateDirectorForLifecycle(CreateDirectorDefinition("cancel-" + cancellationName, EventCategory.Support, EventSource.Chaos, EventResponseLevel.L0, 1));
+            EventDirectorRuntimeManager runtime = new EventDirectorRuntimeManager(director, 16);
+            runtime.StartRound(800 + Array.IndexOf(cancellationNames, cancellationName), PopulationTier.E);
+            AssertTrue(director.Scheduler.ScheduleSecondSlot(800, dueAt.AddSeconds(-60)), cancellationName + " 必须先建立 Pending Event2");
+
+            if (cancellationName == "LowPopulation")
+            {
+                runtime.SuspendForRound(cancellationName);
+            }
+            else
+            {
+                director.CleanupRound();
+            }
+
+            AssertTrue(!director.TryBeginSecondSlot(dueAt.AddSeconds(1)), cancellationName + " 后 Event2 不得迟到执行");
+            AssertTrue(!director.Scheduler.SecondSlotDueAt.HasValue, cancellationName + " 后 DueAt 必须被清除");
+        }
+    }
+
+    private static void DirectorSecondSlotExecutesOnlyOnce()
+    {
+        EventDirectorScheduler scheduler = new EventDirectorScheduler(new EventDirectorConfig());
+        DateTime start = Utc(23, 40);
+        AssertTrue(scheduler.ScheduleSecondSlot(801, start), "第二槽位必须成功建立");
+        AssertTrue(scheduler.TryConsumeDueSlot(start.AddSeconds(60)), "第一次到期轮询必须消费");
+        AssertTrue(!scheduler.TryConsumeDueSlot(start.AddSeconds(61)), "第二次到期轮询不得重复消费");
+        AssertTrue(!scheduler.TryConsumeDueSlot(start.AddSeconds(120)), "第三次到期轮询不得重复消费");
+    }
+
+    private static void DirectorSeededSourceSelectionIsReproducible()
+    {
+        DirectorContext context = CreateDirectorContext(
+            CreateCrisisResult(CreateSnapshot(roundId: 802), 3, FoundationStrength.STRONG),
+            null,
+            foundationAvailable: 6,
+            chaosAvailable: 6,
+            goiAvailable: 6);
+        EventEligibilityService eligibility = new EventEligibilityService();
+        EventCandidate foundation = eligibility.Evaluate(context, CreateDirectorDefinition("seed-foundation", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 1), new ProfessionalResponseTracker());
+        EventCandidate chaos = eligibility.Evaluate(context, CreateDirectorDefinition("seed-chaos", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L0, 1), new ProfessionalResponseTracker());
+        EventCandidate goi = eligibility.Evaluate(context, CreateDirectorDefinition("seed-goi", EventCategory.Support, EventSource.Goi, EventResponseLevel.L0, 1), new ProfessionalResponseTracker());
+        EventCandidate[] candidates = { foundation, chaos, goi };
+        SupportSourceArbitrator first = new SupportSourceArbitrator(new EventDirectorConfig(), new SeededRandomSource(12345));
+        SupportSourceArbitrator second = new SupportSourceArbitrator(new EventDirectorConfig(), new SeededRandomSource(12345));
+        EventSource?[] firstResults = Enumerable.Range(0, 20).Select(_ => first.SelectOrdinarySource(context, candidates)).ToArray();
+        EventSource?[] secondResults = Enumerable.Range(0, 20).Select(_ => second.SelectOrdinarySource(context, candidates)).ToArray();
+
+        AssertSequence(firstResults, secondResults, "相同 Seed、Context、候选和权重必须产生相同来源序列");
+        AssertTrue(firstResults.All(source => source is EventSource.Foundation or EventSource.Chaos or EventSource.Goi), "Seed 抽取结果必须始终来自合法来源");
+    }
+
+    private static void DirectorInvalidSourceWeightsUseStableFallback()
+    {
+        EventDirectorConfig config = new EventDirectorConfig
+        {
+            FoundationWeight = -1d,
+            ChaosWeight = double.NaN,
+            GoiWeight = double.PositiveInfinity,
+        }.Normalize();
+        AssertEqual(0d, config.FoundationWeight, "负 Foundation 权重必须归零");
+        AssertEqual(0d, config.ChaosWeight, "NaN Chaos 权重必须归零");
+        AssertEqual(0d, config.GoiWeight, "Infinity GOI 权重必须归零");
+
+        DirectorContext context = CreateDirectorContext(
+            CreateCrisisResult(CreateSnapshot(roundId: 803), 3, FoundationStrength.STRONG),
+            null,
+            foundationAvailable: 6,
+            chaosAvailable: 6,
+            goiAvailable: 6);
+        EventEligibilityService eligibility = new EventEligibilityService();
+        EventCandidate foundation = eligibility.Evaluate(context, CreateDirectorDefinitionWithWeight("zero-foundation", EventSource.Foundation, 0d), new ProfessionalResponseTracker());
+        EventCandidate chaos = eligibility.Evaluate(context, CreateDirectorDefinitionWithWeight("zero-chaos", EventSource.Chaos, 0d), new ProfessionalResponseTracker());
+        EventSource? selected = new SupportSourceArbitrator(config, new SeededRandomSource(9)).SelectOrdinarySource(context, new[] { foundation, chaos });
+
+        AssertEqual(EventSource.Foundation, selected, "总权重为零时必须按稳定 Foundation -> Chaos -> GOI 顺序回退");
+    }
+
+    private static DirectorCycle SelectDirectorCycle(EventDirector director, long roundId, DateTime timestamp)
+    {
+        RoundSnapshot snapshot = CreateSnapshot(roundId: roundId, timestamp: timestamp);
+        DirectorCycle? cycle = director.SelectCycle(CreateDirectorContext(CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG), null));
+        AssertTrue(cycle is not null, "测试 Director 周期必须创建");
+        return cycle!;
+    }
+
+    private static void AdvanceDirectorToPrepared(EventDirector director)
+    {
+        AssertTrue(director.Advance(EventLifecycleState.Prepared, true), "测试周期必须进入 Prepared");
+    }
+
+    private static EventDirector CreateDirectorForLifecycle(EventDefinition definition, IEventCostBoundary? costBoundary = null)
+    {
+        return CreateDirectorForLifecycle(new[] { definition }, costBoundary);
+    }
+
+    private static EventDirector CreateDirectorForLifecycle(IEnumerable<EventDefinition> definitions, IEventCostBoundary? costBoundary = null)
+    {
+        EventDirectorConfig config = new EventDirectorConfig { Enabled = true };
+        return new EventDirector(definitions, config, costBoundary);
+    }
+
+    private sealed class RecordingEventCostBoundary : IEventCostBoundary
+    {
+        public int Count { get; private set; }
+
+        public void Record(EventCandidate candidate, string cycleId, DateTime committedAt)
+        {
+            Count++;
+        }
+    }
+
+    private static EventDefinition CreateDirectorDefinition(
+        string eventId,
+        EventCategory category,
+        EventSource source,
+        EventResponseLevel level,
+        int priority)
+    {
+        return new EventDefinition(
+            eventId,
+            eventId,
+            category,
+            source,
+            level,
+            Array.Empty<CrisisTag>(),
+            CrisisSeverity.Inactive,
+            TierPersonnelPlan.Uniform(4),
+            TierPersonnelPlan.Uniform(1),
+            isEnabled: true,
+            priority: priority,
+            weight: 1d,
+            requiresUndergroundFacility: false);
+    }
+
+    private static EventDefinition CreateDirectorDefinitionWithWeight(string eventId, EventSource source, double weight)
+    {
+        return new EventDefinition(
+            eventId,
+            eventId,
+            EventCategory.Support,
+            source,
+            EventResponseLevel.L0,
+            Array.Empty<CrisisTag>(),
+            CrisisSeverity.Inactive,
+            TierPersonnelPlan.Uniform(6),
+            TierPersonnelPlan.Uniform(1),
+            isEnabled: true,
+            priority: 1,
+            weight,
+            requiresUndergroundFacility: false);
     }
 
     private static void BadgeRegistryRemovesBadgeAfterDeath()

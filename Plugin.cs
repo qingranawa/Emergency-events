@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using EmergencyEvents.Crisis;
 using EmergencyEvents.Disorder;
+using EmergencyEvents.Director;
 using Exiled.API.Features;
 using Exiled.Events.EventArgs.Player;
 using Exiled.Events.EventArgs.Server;
@@ -26,6 +27,7 @@ public sealed partial class Plugin : Plugin<Config>
     private DlrcEvaluatorService? dlrcEvaluatorService;
     private CrisisManager? crisisManager;
     private FacilityDisorderRuntimeManager? facilityDisorderManager;
+    private EventDirectorRuntimeManager? eventDirectorManager;
     private PluginRuntimeCoordinator? runtimeCoordinator;
 
     public override string Name => "EmergencyEvents";
@@ -52,6 +54,8 @@ public sealed partial class Plugin : Plugin<Config>
     public CrisisAssessment? CurrentCrisisAssessment => crisisManager?.CurrentCrisisAssessment;
 
     public FacilityDisorderRuntimeManager? FacilityDisorder => facilityDisorderManager;
+
+    public EventDirectorRuntimeManager? EventDirector => eventDirectorManager;
 
     public PluginRuntimeCoordinator? Runtime => runtimeCoordinator;
 
@@ -105,6 +109,9 @@ public sealed partial class Plugin : Plugin<Config>
             crisisManager.CrisisChanged += OnCrisisChanged;
         }
         facilityDisorderManager = new FacilityDisorderRuntimeManager(Config.FacilityDisorder);
+        eventDirectorManager = new EventDirectorRuntimeManager(
+            new EventDirector(Array.Empty<EventDefinition>(), Config.EventDirector),
+            Config.MinimumPlayers);
         reinforcementManager.MajorWaveCompleted += OnMajorWaveCompleted;
         dlrcEvaluatorService.EvaluationCompleted += OnDlrcEvaluationCompleted;
 
@@ -146,6 +153,7 @@ public sealed partial class Plugin : Plugin<Config>
 
         dlrcEvaluatorService?.CleanupRound("OnDisabled");
         facilityDisorderManager?.CleanupRound();
+        eventDirectorManager?.CleanupRound();
         if (dlrcEvaluatorService is not null)
         {
             dlrcEvaluatorService.EvaluationCompleted -= OnDlrcEvaluationCompleted;
@@ -166,6 +174,7 @@ public sealed partial class Plugin : Plugin<Config>
         reinforcementManager = null;
         roundCoreManager?.CleanupRound();
         roundCoreManager = null;
+        eventDirectorManager = null;
         runtimeCoordinator = null;
         if (ReferenceEquals(Instance, this))
         {
@@ -180,6 +189,7 @@ public sealed partial class Plugin : Plugin<Config>
     {
         dlrcEvaluatorService?.ResetForWaitingForPlayers();
         facilityDisorderManager?.CleanupRound();
+        eventDirectorManager?.CleanupRound();
         crisisManager?.CleanupRound();
         reinforcementManager?.ResetForWaitingForPlayers();
         roundCoreManager?.ResetForWaitingForPlayers();
@@ -193,6 +203,7 @@ public sealed partial class Plugin : Plugin<Config>
             () => reinforcementManager?.CleanupRound(),
             () => roundCoreManager?.CleanupRound());
         facilityDisorderManager?.CleanupRound();
+        eventDirectorManager?.CleanupRound();
         crisisManager?.CleanupRound();
         runtimeCoordinator?.EndRound();
     }
@@ -214,6 +225,9 @@ public sealed partial class Plugin : Plugin<Config>
             roundCoreManager?.State?.Resolution.Tier ?? PopulationTier.E);
         dlrcEvaluatorService?.StartRound(roundCoreManager?.State, reinforcementManager);
         facilityDisorderManager?.StartRound(DateTime.UtcNow, openingPopulation, roundId);
+        eventDirectorManager?.StartRound(
+            roundId,
+            roundCoreManager?.State?.Resolution.Tier ?? PopulationTier.E);
     }
 
     private void OnAllPlayersSpawned()
@@ -237,6 +251,7 @@ public sealed partial class Plugin : Plugin<Config>
     {
         dlrcEvaluatorService?.CleanupRound("RoundEnded");
         facilityDisorderManager?.CleanupRound();
+        eventDirectorManager?.CleanupRound();
         crisisManager?.CleanupRound();
         reinforcementManager?.CleanupRound();
         roundCoreManager?.CleanupRound();
@@ -323,6 +338,7 @@ public sealed partial class Plugin : Plugin<Config>
         reinforcementManager?.SuspendRound(reason);
         dlrcEvaluatorService?.SuspendRound(reason);
         facilityDisorderManager?.ObservePopulation(runtimeCoordinator?.CurrentPopulation ?? 0);
+        eventDirectorManager?.SuspendForRound(reason);
         Log.Info(
             $"[EmergencyEvents][Activation] RuntimeState={runtimeCoordinator?.State}; CurrentPlayers={runtimeCoordinator?.CurrentPopulation ?? 0}; MinimumPlayers={runtimeCoordinator?.MinimumPlayers ?? 0}; Decision={runtimeCoordinator?.State}; Reason={reason}");
     }
@@ -338,10 +354,29 @@ public sealed partial class Plugin : Plugin<Config>
         return Player.Enumerable.Count(player => player.IsConnected);
     }
 
+    private static DirectorPersonnelFacts CreateDirectorPersonnelFacts(RoundSnapshot snapshot)
+    {
+        return new DirectorPersonnelFacts(
+            snapshot.FoundationCombatants,
+            snapshot.ChaosCombatants,
+            snapshot.HostileThirdPartyCombatants,
+            snapshot.EligibleSpectators,
+            snapshot.OverwatchCount,
+            snapshot.CurrentOnlinePlayers);
+    }
+
     private void OnDlrcEvaluationCompleted(DlrcEvaluationCompletedEvent completedEvent)
     {
         CrisisAssessment? assessment = crisisManager?.Evaluate(completedEvent);
         facilityDisorderManager?.HandleEvaluation(completedEvent, assessment);
+        eventDirectorManager?.HandleEvaluation(
+            completedEvent,
+            assessment,
+            facilityDisorderManager?.State,
+            reinforcementManager?.GetMajorWaveRecords() ?? Array.Empty<MajorWaveRecord>(),
+            CreateDirectorPersonnelFacts(completedEvent.Snapshot),
+            FacilityState.Normal,
+            hasO4Selector: false);
     }
 
     private void OnCrisisAssessmentUpdated(CrisisAssessment assessment)

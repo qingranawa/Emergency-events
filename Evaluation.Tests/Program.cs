@@ -140,6 +140,11 @@ internal static class Program
             ("FDI FactionAdvantageChanged 默认 Delta 为零", FdiFactionAdvantageDefaultDeltaIsZero),
             ("FDI 资源边界保留未结算事件并限制历史", FdiResourceBoundsPreservePendingEvents),
             ("FDI 1000 次 Periodic 后历史和事件容器有界且不重复消费", FdiResourceBoundsRemainStableAfterThousandPeriodics),
+            ("FDI 首次存量过滤 ForceChanged 但后续仍计增量", FdiInitialForceStockFilterIsInitializationOnly),
+            ("FDI 首次存量过滤 CrisisTransition 但后续仍计增量", FdiInitialCrisisTransitionFilterIsInitializationOnly),
+            ("FDI 近期 Combat Transient 不被当前 MTF 存量吞掉", FdiRecentCombatTransientSurvivesCurrentStock),
+            ("FDI 079 SYS 升级链只保留一个非零 Delta", Fdi079SysUpgradeChainHasOneNonZeroDelta),
+            ("FDI 079 SYS 移除链只保留一个非零 Delta", Fdi079SysRemovalChainHasOneNonZeroDelta),
         };
 
         string requestedModule = args.Length == 0 ? "ALL" : args[0].ToUpperInvariant();
@@ -1350,6 +1355,83 @@ internal static class Program
         FacilityDisorderSettlement? duplicateSettlement = SettleFdi(service, duplicateAt, evaluationId: 1001);
         AssertNear(beforeDuplicate, service.State.CurrentFacilityDisorder, "淘汰旧 dedup ID 后旧时间戳事件不得重新结算");
         AssertEqual(0, duplicateSettlement!.ProcessedEvents.Count, "旧重复事件不得进入新结算");
+    }
+
+    private static void FdiInitialForceStockFilterIsInitializationOnly()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime initialAt = Utc(6, 31);
+        service.StartRound(initialAt.AddMinutes(-5), 16, 31);
+        service.Record(new DisorderEvent("mtf-wave", initialAt.AddSeconds(-30), DisorderEventCategory.MtfForceChanged, -6d, "MTF 0->6; current stock expresses this", isRepresentedByCurrentStock: true));
+        FacilityDisorderSettlement? initial = SettleFdi(service, initialAt, new FacilityDisorderStockSnapshot(6, 0, 0, 0, false, 0, null, false, false, false), evaluationId: 31, roundId: 31);
+        AssertNear(44d, service.State.CurrentFacilityDisorder, "首次结算必须只使用 MTF 当前存量");
+        AssertNear(0d, initial!.RecentTransientDelta, "首次结算不得重复使用存量 ForceChanged");
+        service.Record(new DisorderEvent("mtf-loss-after-init", initialAt.AddSeconds(30), DisorderEventCategory.MtfForceChanged, 2d, "07:01 MTF 6->5; post-initial increment", isRepresentedByCurrentStock: true));
+        FacilityDisorderSettlement? next = SettleFdi(service, initialAt.AddSeconds(30), new FacilityDisorderStockSnapshot(5, 0, 0, 0, false, 0, null, false, false, false), evaluationId: 32, roundId: 31);
+        AssertNear(2d, next!.RecentTransientDelta, "首次结算后 ForceChanged 必须作为正常增量");
+        AssertNear(46d, service.State.CurrentFacilityDisorder, "后续 ForceChanged 增量结果错误");
+    }
+
+    private static void FdiInitialCrisisTransitionFilterIsInitializationOnly()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime initialAt = Utc(6, 31);
+        service.StartRound(initialAt.AddMinutes(-5), 16, 33);
+        service.Record(new DisorderEvent("sys-transition", initialAt.AddSeconds(-30), DisorderEventCategory.CrisisTransition, 3d, "SYS OFF->L3; current stock expresses final state", isRepresentedByCurrentStock: true));
+        RoundSnapshot initialSnapshot = CreateSnapshot(roundId: 33, timestamp: initialAt);
+        CrisisAssessment initialAssessment = CreateCrisisAssessment(initialSnapshot, (CrisisTag.SYS, CrisisSeverity.Level3));
+        FacilityDisorderSettlement? initial = SettleFdi(service, initialAt, CreateStock(initialSnapshot, initialAssessment), evaluationId: 33, roundId: 33, assessment: initialAssessment);
+        AssertNear(53d, service.State.CurrentFacilityDisorder, "首次结算必须只使用 SYS 当前存量");
+        AssertNear(0d, initial!.RecentTransientDelta, "首次结算不得重复使用 SYS Transition");
+        service.Record(new DisorderEvent("sys-escalation-after-init", initialAt.AddSeconds(30), DisorderEventCategory.CrisisTransition, 4d, "SYS L3->L4; post-initial increment", isRepresentedByCurrentStock: true));
+        FacilityDisorderSettlement? next = SettleFdi(service, initialAt.AddSeconds(30), new FacilityDisorderStockSnapshot(0, 0, 0, 0, false, 0, null, false, false, false), evaluationId: 34, roundId: 33);
+        AssertNear(4d, next!.RecentTransientDelta, "首次结算后 CrisisTransition 必须作为正常增量");
+        AssertNear(57d, service.State.CurrentFacilityDisorder, "后续 CrisisTransition 增量结果错误");
+    }
+
+    private static void FdiRecentCombatTransientSurvivesCurrentStock()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime initialAt = Utc(6, 31);
+        service.StartRound(initialAt.AddMinutes(-5), 16, 35);
+        service.Record(new DisorderEvent("combat-transient", initialAt.AddSeconds(-30), DisorderEventCategory.CombatDeath, 3d, "Foundation 被 SCP 击杀; independent transient", isRepresentedByCurrentStock: false));
+        FacilityDisorderSettlement? settlement = SettleFdi(service, initialAt, new FacilityDisorderStockSnapshot(5, 0, 0, 0, false, 0, null, false, false, false), evaluationId: 35, roundId: 35);
+        AssertNear(-5d, settlement!.CurrentStockAdjustment, "MTF 当前存量调整错误");
+        AssertNear(3d, settlement.RecentTransientDelta, "近期 Combat Transient 不得被当前存量过滤");
+        AssertNear(48d, service.State.CurrentFacilityDisorder, "存量与近期战斗瞬时量必须同时生效");
+    }
+
+    private static void Fdi079SysUpgradeChainHasOneNonZeroDelta()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime initialAt = Utc(6, 31);
+        service.StartRound(initialAt.AddMinutes(-5), 16, 36);
+        RoundSnapshot initialSnapshot = CreateSnapshot(roundId: 36, timestamp: initialAt, scp079Present: true, scp079Tier: 2);
+        CrisisAssessment initialAssessment = CreateCrisisAssessment(initialSnapshot, (CrisisTag.SYS, CrisisSeverity.Level3));
+        SettleFdi(service, initialAt, CreateStock(initialSnapshot, initialAssessment), evaluationId: 36, roundId: 36, assessment: initialAssessment);
+        DateTime nextAt = initialAt.AddSeconds(30);
+        service.Record(new DisorderEvent("079-upgrade", nextAt, DisorderEventCategory.Scp079TierChanged, 0d, "T2->T3; ExpressedBySYS", isRepresentedByCurrentStock: true));
+        service.Record(new DisorderEvent("sys-escalation", nextAt, DisorderEventCategory.CrisisTransition, 4d, "SYS L3->L4", isRepresentedByCurrentStock: true));
+        RoundSnapshot nextSnapshot = CreateSnapshot(roundId: 36, timestamp: nextAt, scp079Present: true, scp079Tier: 3);
+        DlrcEvaluationResult nextResult = CreateResult(nextSnapshot);
+        CrisisAssessment nextAssessment = new CrisisAssessment(37, DlrcEvaluationTrigger.PERIODIC, nextSnapshot, nextResult, new[] { new CrisisDetectionResult(CrisisTag.SYS, true, CrisisSeverity.Level4, "test") });
+        FacilityDisorderSettlement? settlement = SettleFdi(service, nextAt, CreateStock(nextSnapshot, nextAssessment), evaluationId: 37, roundId: 36, assessment: nextAssessment);
+        AssertNear(4d, settlement!.RecentTransientDelta, "079/SYS 升级链只能保留 SYS 非零 Delta");
+    }
+
+    private static void Fdi079SysRemovalChainHasOneNonZeroDelta()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime initialAt = Utc(6, 31);
+        service.StartRound(initialAt.AddMinutes(-5), 16, 38);
+        RoundSnapshot initialSnapshot = CreateSnapshot(roundId: 38, timestamp: initialAt, scp079Present: true, scp079Tier: 3);
+        CrisisAssessment initialAssessment = CreateCrisisAssessment(initialSnapshot, (CrisisTag.SYS, CrisisSeverity.Level3));
+        SettleFdi(service, initialAt, CreateStock(initialSnapshot, initialAssessment), evaluationId: 38, roundId: 38, assessment: initialAssessment);
+        DateTime nextAt = initialAt.AddSeconds(30);
+        service.Record(new DisorderEvent("079-removed", nextAt, DisorderEventCategory.Scp079TierChanged, 0d, "T3->Removed; ExpressedBySYS", isRepresentedByCurrentStock: true));
+        service.Record(new DisorderEvent("sys-resolved", nextAt, DisorderEventCategory.CrisisTransition, -4d, "SYS L3->OFF", isRepresentedByCurrentStock: true));
+        FacilityDisorderSettlement? settlement = SettleFdi(service, nextAt, new FacilityDisorderStockSnapshot(0, 0, 0, 0, false, 0, null, false, false, false), evaluationId: 39, roundId: 38);
+        AssertNear(-4d, settlement!.RecentTransientDelta, "079/SYS 移除链只能保留 SYS 非零 Delta");
     }
 
     private static DlrcEvaluationCompletedEvent CreateEvaluation(RoundSnapshot snapshot, long evaluationId)

@@ -213,7 +213,7 @@ public sealed class FacilityDisorderRuntimeManager
         string prefix = $"death:{playerId}:{timestamp.Ticks}";
         if (IsMainScp(targetRole))
         {
-            service.Record(new DisorderEvent(prefix + ":scp", timestamp, DisorderEventCategory.ScpEliminated, config.ScpEliminated, $"Target={targetRole};Reason=ImmediateThreatReduced", isRepresentedByCurrentStock: true));
+            service.Record(new DisorderEvent(prefix + ":scp", timestamp, DisorderEventCategory.ScpEliminated, config.ScpEliminated, $"Target={targetRole};Reason=ImmediateThreatReduced"));
         }
         else if (targetRole == RoleTypeId.Scp0492)
         {
@@ -227,18 +227,20 @@ public sealed class FacilityDisorderRuntimeManager
                 : IsChaos(attackerRole) ? config.FoundationKilledByChaos : null;
             if (delta.HasValue)
             {
-                service.Record(new DisorderEvent(prefix + ":foundation", timestamp, DisorderEventCategory.CombatDeath, delta.Value, $"Target=Foundation;Attacker={attackerRole};Reason=ImmediateCombatDeath", isRepresentedByCurrentStock: IsMtf(targetRole)));
+                service.Record(new DisorderEvent(prefix + ":foundation", timestamp, DisorderEventCategory.CombatDeath, delta.Value, $"Target=Foundation;Attacker={attackerRole};Reason=ImmediateCombatDeath"));
             }
         }
         else if (IsChaos(targetRole) && IsFoundation(attackerRole))
         {
-            service.Record(new DisorderEvent(prefix + ":hostile", timestamp, DisorderEventCategory.CombatDeath, config.FoundationKillsHostileHuman, $"Target=Chaos;Attacker={attackerRole};Reason=ImmediateCombatDeath", isRepresentedByCurrentStock: true));
+            service.Record(new DisorderEvent(prefix + ":hostile", timestamp, DisorderEventCategory.CombatDeath, config.FoundationKillsHostileHuman, $"Target=Chaos;Attacker={attackerRole};Reason=ImmediateCombatDeath"));
         }
     }
 
     private void RecordSnapshotFacts(DlrcEvaluationCompletedEvent completedEvent, CrisisAssessment? assessment)
     {
         RoundSnapshot snapshot = completedEvent.Snapshot;
+        bool sysChanged = previousAssessment is not null
+            && previousAssessment.GetSeverity(CrisisTag.SYS) != assessment?.GetSeverity(CrisisTag.SYS);
         if (!hasObserved079)
         {
             hasObserved079 = true;
@@ -249,21 +251,30 @@ public sealed class FacilityDisorderRuntimeManager
                 $"eval:{completedEvent.EvaluationId}:079-removed",
                 snapshot.Timestamp,
                 DisorderEventCategory.Scp079TierChanged,
-                config.Scp079Removed,
-                "SCP-079 removed"));
+                sysChanged ? 0d : config.Scp079Removed,
+                sysChanged ? "SCP-079 removed;Reason=ExpressedBySYS" : "SCP-079 removed;Reason=Independent079Fact",
+                isRepresentedByCurrentStock: true));
+        }
+        else if (!previous079Present && snapshot.Scp079Present)
+        {
+            service.Record(new DisorderEvent(
+                $"eval:{completedEvent.EvaluationId}:079-reappeared",
+                snapshot.Timestamp,
+                DisorderEventCategory.Scp079TierChanged,
+                sysChanged ? 0d : snapshot.Scp079Tier * config.Scp079TierIncreasePerLevel,
+                sysChanged ? "SCP-079 reappeared;Reason=ExpressedBySYS" : "SCP-079 reappeared;Reason=Independent079Fact",
+                isRepresentedByCurrentStock: true));
         }
         else if (previous079Present && snapshot.Scp079Present && snapshot.Scp079Tier != previous079Tier)
         {
             int difference = snapshot.Scp079Tier - previous079Tier;
             double perLevel = difference > 0 ? config.Scp079TierIncreasePerLevel : config.Scp079TierDecreasePerLevel;
-            bool expressedBySys = previousAssessment is not null
-                && previousAssessment.GetSeverity(CrisisTag.SYS) != assessment?.GetSeverity(CrisisTag.SYS);
             service.Record(new DisorderEvent(
                 $"eval:{completedEvent.EvaluationId}:079-tier",
                 snapshot.Timestamp,
                 DisorderEventCategory.Scp079TierChanged,
-                expressedBySys ? 0d : Math.Abs(difference) * perLevel,
-                expressedBySys
+                sysChanged ? 0d : Math.Abs(difference) * perLevel,
+                sysChanged
                     ? $"Previous={previous079Tier};Current={snapshot.Scp079Tier};Reason=ExpressedBySYS"
                     : $"Previous={previous079Tier};Current={snapshot.Scp079Tier};Reason=Independent079Fact",
                 isRepresentedByCurrentStock: true));
@@ -337,7 +348,8 @@ public sealed class FacilityDisorderRuntimeManager
                 timestamp,
                 DisorderEventCategory.CrisisTransition,
                 delta,
-                $"Tag={tag};Previous={previous};Current={current};Reason={(tag == CrisisTag.CON ? "LongTermContainmentState" : "CrisisTransition")}"));
+                $"Tag={tag};Previous={previous};Current={current};Reason={(tag == CrisisTag.CON ? "LongTermContainmentState" : "CrisisTransition")}",
+                isRepresentedByCurrentStock: true));
         }
     }
 
@@ -407,7 +419,8 @@ public sealed class FacilityDisorderRuntimeManager
             DateTime.UtcNow,
             category,
             delta,
-            $"Previous={previous};Current={current}"));
+            $"Previous={previous};Current={current}",
+            isRepresentedByCurrentStock: true));
     }
 
     private string NextEventId(string prefix)

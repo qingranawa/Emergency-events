@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using CommandSystem;
 using EmergencyEvents.Crisis;
 using EmergencyEvents.Disorder;
 using EmergencyEvents.Evaluation;
 using EmergencyEvents.RoundCore;
+using PlayerRoles;
 
 namespace EmergencyEvents.RuntimeHarness;
 
@@ -37,6 +40,7 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
         }
 
         List<string> evidence = new List<string>();
+        RunRuntimeProducerChecks(evidence);
         DateTime start = new DateTime(2026, 8, 25, 4, 0, 0, DateTimeKind.Utc);
         const long roundId = 880045;
         manager.StartRound(start, 16, roundId);
@@ -125,6 +129,116 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
         evidence.Add($"CLEANUP Active={manager.State.IsActive};Initialized={manager.State.IsInitialized};Events={manager.Events.Count};History={manager.History.Count};LastProcessedAt={manager.State.LastProcessedAt}");
         response = "PASS FDI_RUNTIME_PROBE\n" + string.Join("\n", evidence);
         return true;
+    }
+
+    private static void RunRuntimeProducerChecks(List<string> evidence)
+    {
+        const long roundId = 880046;
+        DateTime start = new DateTime(2026, 8, 25, 4, 0, 0, DateTimeKind.Utc);
+        FacilityDisorderRuntimeManager manager = new FacilityDisorderRuntimeManager();
+        manager.StartRound(start, 16, roundId);
+
+        InvokePrivate(
+            manager,
+            "RecordForceDelta",
+            "mtf",
+            DisorderEventCategory.MtfForceChanged,
+            0,
+            6,
+            -1d,
+            2d);
+        InvokePrivate(manager, "RecordForceDelta", "chaos", DisorderEventCategory.ChaosForceChanged, 0, 6, 1d, -1d);
+        InvokePrivate(manager, "RecordForceDelta", "zombies", DisorderEventCategory.ZombieForceChanged, 2, 5, 1d, -1d);
+        Require(manager.Events.Count == 3 && manager.Events.All(eventFact => eventFact.IsRepresentedByCurrentStock), "all pure stock ForceChanged facts must be stock-represented");
+        evidence.Add($"PRODUCER_FORCE StockRepresented={manager.Events.All(eventFact => eventFact.IsRepresentedByCurrentStock)};Count={manager.Events.Count}");
+
+        manager.CleanupRound();
+        manager.StartRound(start, 16, roundId + 1);
+        InvokePrivate(manager, "RecordDeathFacts", start.AddMinutes(2), 1, RoleTypeId.NtfPrivate, RoleTypeId.Scp173);
+        DisorderEvent combatEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CombatDeath);
+        Require(!combatEvent.IsRepresentedByCurrentStock, "CombatDeath must remain a transient event");
+        evidence.Add($"PRODUCER_COMBAT StockRepresented={combatEvent.IsRepresentedByCurrentStock};Delta={combatEvent.Delta:0.####}");
+
+        manager.CleanupRound();
+        manager.StartRound(start, 16, roundId + 2);
+        RoundSnapshot previousSnapshot = CreateSnapshot(roundId + 2, start.AddMinutes(150), scp079Present: true, scp079Tier: 2);
+        CrisisAssessment previousAssessment = CreateAssessment(previousSnapshot, 1, (CrisisTag.SYS, CrisisSeverity.Level3));
+        InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(previousSnapshot, previousAssessment, 1), previousAssessment);
+        RoundSnapshot currentSnapshot = CreateSnapshot(roundId + 2, start.AddMinutes(151), scp079Present: true, scp079Tier: 3);
+        CrisisAssessment currentAssessment = CreateAssessment(currentSnapshot, 2, (CrisisTag.SYS, CrisisSeverity.Level4));
+        InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(currentSnapshot, currentAssessment, 2), currentAssessment);
+        DisorderEvent tierEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.Scp079TierChanged);
+        DisorderEvent crisisEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
+        Require(tierEvent.Delta == 0d && crisisEvent.Delta == 4d, "079/SYS upgrade chain must have one non-zero Delta");
+        Require(tierEvent.IsRepresentedByCurrentStock && crisisEvent.IsRepresentedByCurrentStock, "079/SYS initialization facts must be stock-represented");
+        evidence.Add($"PRODUCER_079_SYS TierDelta={tierEvent.Delta:0.####};CrisisDelta={crisisEvent.Delta:0.####};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
+
+        manager.CleanupRound();
+        manager.StartRound(start, 16, roundId + 3);
+        RoundSnapshot levelFourPreviousSnapshot = CreateSnapshot(roundId + 3, start.AddMinutes(150), scp079Present: true, scp079Tier: 3);
+        CrisisAssessment levelFourPreviousAssessment = CreateAssessment(levelFourPreviousSnapshot, 5, (CrisisTag.SYS, CrisisSeverity.Level3));
+        InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(levelFourPreviousSnapshot, levelFourPreviousAssessment, 5), levelFourPreviousAssessment);
+        RoundSnapshot levelFourCurrentSnapshot = CreateSnapshot(roundId + 3, start.AddMinutes(151), scp079Present: true, scp079Tier: 4);
+        CrisisAssessment levelFourCurrentAssessment = CreateAssessment(levelFourCurrentSnapshot, 6, (CrisisTag.SYS, CrisisSeverity.Level4));
+        InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(levelFourCurrentSnapshot, levelFourCurrentAssessment, 6), levelFourCurrentAssessment);
+        DisorderEvent levelFourTierEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.Scp079TierChanged);
+        DisorderEvent levelFourCrisisEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
+        Require(levelFourTierEvent.Delta == 0d && levelFourCrisisEvent.Delta == 4d, "079 T3->T4/SYS L3->L4 chain must have one non-zero Delta");
+        evidence.Add($"PRODUCER_079_T3_T4 TierDelta={levelFourTierEvent.Delta:0.####};CrisisDelta={levelFourCrisisEvent.Delta:0.####};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
+
+        manager.CleanupRound();
+        manager.StartRound(start, 16, roundId + 4);
+        RoundSnapshot removalPreviousSnapshot = CreateSnapshot(roundId + 4, start.AddMinutes(150), scp079Present: true, scp079Tier: 3);
+        CrisisAssessment removalPreviousAssessment = CreateAssessment(removalPreviousSnapshot, 10, (CrisisTag.SYS, CrisisSeverity.Level3));
+        InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(removalPreviousSnapshot, removalPreviousAssessment, 10), removalPreviousAssessment);
+        RoundSnapshot removalCurrentSnapshot = CreateSnapshot(roundId + 4, start.AddMinutes(151), scp079Present: false, scp079Tier: 0);
+        CrisisAssessment removalCurrentAssessment = CreateAssessment(removalCurrentSnapshot, 11);
+        InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(removalCurrentSnapshot, removalCurrentAssessment, 11), removalCurrentAssessment);
+        DisorderEvent removed079Event = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.Scp079TierChanged);
+        DisorderEvent resolvedSysEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
+        Require(removed079Event.Delta == 0d && resolvedSysEvent.Delta == -4d, "079 removal/SYS resolution chain must have one non-zero Delta");
+        evidence.Add($"PRODUCER_079_REMOVE TierDelta={removed079Event.Delta:0.####};CrisisDelta={resolvedSysEvent.Delta:0.####};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
+
+        manager.CleanupRound();
+        manager.StartRound(start, 16, roundId + 5);
+        RoundSnapshot reappearPreviousSnapshot = CreateSnapshot(roundId + 5, start.AddMinutes(150), scp079Present: false, scp079Tier: 0);
+        CrisisAssessment reappearPreviousAssessment = CreateAssessment(reappearPreviousSnapshot, 20);
+        InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(reappearPreviousSnapshot, reappearPreviousAssessment, 20), reappearPreviousAssessment);
+        RoundSnapshot reappearCurrentSnapshot = CreateSnapshot(roundId + 5, start.AddMinutes(151), scp079Present: true, scp079Tier: 3);
+        CrisisAssessment reappearCurrentAssessment = CreateAssessment(reappearCurrentSnapshot, 21, (CrisisTag.SYS, CrisisSeverity.Level3));
+        InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(reappearCurrentSnapshot, reappearCurrentAssessment, 21), reappearCurrentAssessment);
+        DisorderEvent reappeared079Event = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.Scp079TierChanged);
+        DisorderEvent activatedSysEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
+        Require(reappeared079Event.Delta == 0d && activatedSysEvent.Delta == 3d, "079 reappearance/SYS activation chain must have one non-zero Delta");
+        evidence.Add($"PRODUCER_079_REAPPEAR TierDelta={reappeared079Event.Delta:0.####};CrisisDelta={activatedSysEvent.Delta:0.####};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
+
+        manager.CleanupRound();
+        manager.StartRound(start, 16, roundId + 3);
+        InvokePrivate(manager, "RecordDeathFacts", start.AddMinutes(3), 2, RoleTypeId.Scp0492, RoleTypeId.None);
+        InvokePrivate(manager, "ReconcileForceSnapshot", false);
+        int zombieEvents = manager.Events.Count(eventFact => eventFact.Category == DisorderEventCategory.ZombieForceChanged);
+        Require(zombieEvents == 1, "049-2 death path must create one ZombieForceChanged");
+        evidence.Add($"PRODUCER_ZOMBIE ZombieForceChanged={zombieEvents}");
+        manager.CleanupRound();
+    }
+
+    private static void InvokePrivate(object target, string methodName, params object[] arguments)
+    {
+        MethodInfo? method = target.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
+        if (method is null)
+        {
+            throw new InvalidOperationException($"Missing private method: {methodName}");
+        }
+
+        method.Invoke(target, arguments);
+    }
+
+    private static void Require(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException(message);
+        }
     }
 
     private static DlrcEvaluationCompletedEvent CreateEvaluation(

@@ -43,8 +43,6 @@ public sealed class FacilityDisorderConfig
 
     public double ScpEliminated { get; set; } = -3d;
 
-    public double HostileFactionEliminated { get; set; } = -2d;
-
     public double MtfGainPerCombatant { get; set; } = -1d;
 
     public double MtfLossPerCombatant { get; set; } = 2d;

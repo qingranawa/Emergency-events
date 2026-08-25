@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using EmergencyEvents.Crisis;
+using EmergencyEvents.Disorder;
 using Exiled.API.Features;
 using Exiled.Events.EventArgs.Player;
 using Exiled.Events.EventArgs.Server;
@@ -24,6 +25,7 @@ public sealed partial class Plugin : Plugin<Config>
     private ReinforcementManager? reinforcementManager;
     private DlrcEvaluatorService? dlrcEvaluatorService;
     private CrisisManager? crisisManager;
+    private FacilityDisorderRuntimeManager? facilityDisorderManager;
     private PluginRuntimeCoordinator? runtimeCoordinator;
 
     public override string Name => "EmergencyEvents";
@@ -48,6 +50,8 @@ public sealed partial class Plugin : Plugin<Config>
     /// 对后续 Module 05 提供当前回合最后一份有效危机评估。
     /// </summary>
     public CrisisAssessment? CurrentCrisisAssessment => crisisManager?.CurrentCrisisAssessment;
+
+    public FacilityDisorderRuntimeManager? FacilityDisorder => facilityDisorderManager;
 
     public PluginRuntimeCoordinator? Runtime => runtimeCoordinator;
 
@@ -100,6 +104,7 @@ public sealed partial class Plugin : Plugin<Config>
             crisisManager.CrisisAssessmentUpdated += OnCrisisAssessmentUpdated;
             crisisManager.CrisisChanged += OnCrisisChanged;
         }
+        facilityDisorderManager = new FacilityDisorderRuntimeManager(Config.FacilityDisorder);
         reinforcementManager.MajorWaveCompleted += OnMajorWaveCompleted;
         dlrcEvaluatorService.EvaluationCompleted += OnDlrcEvaluationCompleted;
 
@@ -114,6 +119,7 @@ public sealed partial class Plugin : Plugin<Config>
         PlayerEvents.Joined += OnPlayerJoined;
         PlayerEvents.Left += OnPlayerLeft;
         PlayerEvents.Died += OnPlayerDied;
+        PlayerEvents.ChangingRole += OnChangingRole;
         WarheadEvents.Stopping += OnWarheadStopping;
         WarheadEvents.Detonated += OnWarheadDetonated;
 
@@ -134,10 +140,12 @@ public sealed partial class Plugin : Plugin<Config>
         PlayerEvents.Joined -= OnPlayerJoined;
         PlayerEvents.Left -= OnPlayerLeft;
         PlayerEvents.Died -= OnPlayerDied;
+        PlayerEvents.ChangingRole -= OnChangingRole;
         WarheadEvents.Stopping -= OnWarheadStopping;
         WarheadEvents.Detonated -= OnWarheadDetonated;
 
         dlrcEvaluatorService?.CleanupRound("OnDisabled");
+        facilityDisorderManager?.CleanupRound();
         if (dlrcEvaluatorService is not null)
         {
             dlrcEvaluatorService.EvaluationCompleted -= OnDlrcEvaluationCompleted;
@@ -171,6 +179,7 @@ public sealed partial class Plugin : Plugin<Config>
     private void OnWaitingForPlayers()
     {
         dlrcEvaluatorService?.ResetForWaitingForPlayers();
+        facilityDisorderManager?.CleanupRound();
         crisisManager?.CleanupRound();
         reinforcementManager?.ResetForWaitingForPlayers();
         roundCoreManager?.ResetForWaitingForPlayers();
@@ -183,6 +192,7 @@ public sealed partial class Plugin : Plugin<Config>
             reason => dlrcEvaluatorService?.CleanupRound(reason),
             () => reinforcementManager?.CleanupRound(),
             () => roundCoreManager?.CleanupRound());
+        facilityDisorderManager?.CleanupRound();
         crisisManager?.CleanupRound();
         runtimeCoordinator?.EndRound();
     }
@@ -203,6 +213,7 @@ public sealed partial class Plugin : Plugin<Config>
             roundId,
             roundCoreManager?.State?.Resolution.Tier ?? PopulationTier.E);
         dlrcEvaluatorService?.StartRound(roundCoreManager?.State, reinforcementManager);
+        facilityDisorderManager?.StartRound(DateTime.UtcNow, openingPopulation, roundId);
     }
 
     private void OnAllPlayersSpawned()
@@ -219,11 +230,13 @@ public sealed partial class Plugin : Plugin<Config>
         }
 
         roundCoreManager?.ApplyOpeningComposition();
+        facilityDisorderManager?.ScheduleOpeningForceBaseline();
     }
 
     private void OnRoundEnded(RoundEndedEventArgs _)
     {
         dlrcEvaluatorService?.CleanupRound("RoundEnded");
+        facilityDisorderManager?.CleanupRound();
         crisisManager?.CleanupRound();
         reinforcementManager?.CleanupRound();
         roundCoreManager?.CleanupRound();
@@ -233,17 +246,25 @@ public sealed partial class Plugin : Plugin<Config>
     private void OnPlayerJoined(JoinedEventArgs _)
     {
         SchedulePopulationEvaluation();
+        facilityDisorderManager?.HandlePlayerJoined();
     }
 
     private void OnPlayerLeft(LeftEventArgs _)
     {
         SchedulePopulationEvaluation();
+        facilityDisorderManager?.HandlePlayerLeft();
     }
 
     private void OnPlayerDied(DiedEventArgs ev)
     {
         roundCoreManager?.HandlePlayerDied(ev.Player);
         dlrcEvaluatorService?.HandlePlayerDied(ev.Player.Id, ev.TargetOldRole);
+        facilityDisorderManager?.HandlePlayerDied(ev);
+    }
+
+    private void OnChangingRole(ChangingRoleEventArgs ev)
+    {
+        facilityDisorderManager?.HandleChangingRole(ev);
     }
 
     private void OnWarheadStopping(Exiled.Events.EventArgs.Warhead.StoppingEventArgs ev)
@@ -269,6 +290,7 @@ public sealed partial class Plugin : Plugin<Config>
     private void OnRespawnedTeam(RespawnedTeamEventArgs ev)
     {
         reinforcementManager?.HandleRespawnedTeam(ev);
+        facilityDisorderManager?.HandleRespawnedTeam(ev);
     }
 
     private void OnMajorWaveCompleted(MajorWaveCompletedEvent ev)
@@ -300,6 +322,7 @@ public sealed partial class Plugin : Plugin<Config>
     {
         reinforcementManager?.SuspendRound(reason);
         dlrcEvaluatorService?.SuspendRound(reason);
+        facilityDisorderManager?.ObservePopulation(runtimeCoordinator?.CurrentPopulation ?? 0);
         Log.Info(
             $"[EmergencyEvents][Activation] RuntimeState={runtimeCoordinator?.State}; CurrentPlayers={runtimeCoordinator?.CurrentPopulation ?? 0}; MinimumPlayers={runtimeCoordinator?.MinimumPlayers ?? 0}; Decision={runtimeCoordinator?.State}; Reason={reason}");
     }
@@ -317,7 +340,8 @@ public sealed partial class Plugin : Plugin<Config>
 
     private void OnDlrcEvaluationCompleted(DlrcEvaluationCompletedEvent completedEvent)
     {
-        crisisManager?.Evaluate(completedEvent);
+        CrisisAssessment? assessment = crisisManager?.Evaluate(completedEvent);
+        facilityDisorderManager?.HandleEvaluation(completedEvent, assessment);
     }
 
     private void OnCrisisAssessmentUpdated(CrisisAssessment assessment)

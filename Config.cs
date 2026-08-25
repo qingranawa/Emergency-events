@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using EmergencyEvents.Crisis;
+using EmergencyEvents.Disorder;
 using EmergencyEvents.Reinforcement;
 using Exiled.API.Interfaces;
 
@@ -97,6 +98,9 @@ public sealed class Config : IConfig
 
     [Description("是否启用 Module 04 Crisis System。关闭后不创建危机评估。")]
     public bool CrisisSystemEnabled { get; set; } = true;
+
+    [Description("Facility Disorder System 配置。FDI 只在正常 PERIODIC 评估完成后结算，不改写 M03/M04 分数。")]
+    public FacilityDisorderConfig FacilityDisorder { get; set; } = new FacilityDisorderConfig();
 
     [Description("BIO 危机 E 档 L3/L4/L5 的 049-2 数量阈值。")]
     public CrisisTierThresholds CrisisBioThresholdsE { get; set; } = new CrisisTierThresholds(3, 5, 7);

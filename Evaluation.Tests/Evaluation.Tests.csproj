@@ -19,6 +19,7 @@
     <Compile Include="..\Reinforcement\MajorWaveHistory.cs" Link="Reinforcement\MajorWaveHistory.cs" />
     <Compile Include="..\RoundCore\ScpRolePolicy.cs" Link="RoundCore\ScpRolePolicy.cs" />
     <Compile Include="..\Crisis\**\*.cs" Link="Crisis\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\Disorder\**\*.cs" Exclude="..\Disorder\FacilityDisorderRuntimeManager.cs" Link="Disorder\%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="..\RemoteAdminCommands\*.cs" Exclude="..\RemoteAdminCommands\EmergencyEventsCommand.cs" Link="RemoteAdminCommands\%(Filename)%(Extension)" />
     <Compile Include="..\Evaluation\*.cs" Exclude="..\Evaluation\SnapshotCollector.cs;..\Evaluation\DlrcEvaluatorService.cs" Link="Evaluation\%(Filename)%(Extension)" />
   </ItemGroup>

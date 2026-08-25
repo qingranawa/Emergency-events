@@ -37,6 +37,10 @@ public enum EmergencyEventsCommandKind
     CrisisState,
     CrisisList,
     CrisisCheck,
+    DisorderState,
+    DisorderEvents,
+    DisorderHistory,
+    DisorderExplain,
     TestCrisisAll,
     TestCrisisCheck,
     TestCrisisBioZombies,
@@ -47,6 +51,7 @@ public enum EmergencyEventsCommandKind
     TestCrisisConCheckpointCommit,
     TestCrisisEndCheck,
     TestCrisisEndSimulate,
+    TestDisorderEvent,
     Cleanup,
     TestCleanupVerify,
 }

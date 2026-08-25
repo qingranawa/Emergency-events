@@ -48,6 +48,10 @@ public static class EmergencyEventsCommandGuard
             or EmergencyEventsCommandKind.DlrcSnapshot
             or EmergencyEventsCommandKind.CrisisState
             or EmergencyEventsCommandKind.CrisisList
+            or EmergencyEventsCommandKind.DisorderState
+            or EmergencyEventsCommandKind.DisorderEvents
+            or EmergencyEventsCommandKind.DisorderHistory
+            or EmergencyEventsCommandKind.DisorderExplain
             or EmergencyEventsCommandKind.Cleanup;
     }
 
@@ -67,6 +71,7 @@ public static class EmergencyEventsCommandGuard
             or EmergencyEventsCommandKind.TestCrisisConCheckpoint
             or EmergencyEventsCommandKind.TestCrisisEndCheck
             or EmergencyEventsCommandKind.TestCrisisEndSimulate
+            or EmergencyEventsCommandKind.TestDisorderEvent
             or EmergencyEventsCommandKind.TestCleanupVerify;
     }
 }

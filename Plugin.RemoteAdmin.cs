@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using EmergencyEvents.Crisis;
+using EmergencyEvents.Disorder;
 using EmergencyEvents.Evaluation;
 using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RemoteAdminCommands;
@@ -63,6 +64,10 @@ public sealed partial class Plugin
             EmergencyEventsCommandKind.CrisisState => TryFormatCrisisState(out response),
             EmergencyEventsCommandKind.CrisisList => TryFormatCrisisList(out response),
             EmergencyEventsCommandKind.CrisisCheck => TryCheckCrisis(request.Target, isDryRun: false, out response),
+            EmergencyEventsCommandKind.DisorderState => TryFormatDisorderState(out response),
+            EmergencyEventsCommandKind.DisorderEvents => TryFormatDisorderEvents(out response),
+            EmergencyEventsCommandKind.DisorderHistory => TryFormatDisorderHistory(request.Number, out response),
+            EmergencyEventsCommandKind.DisorderExplain => TryFormatDisorderExplain(out response),
             EmergencyEventsCommandKind.TestCrisisAll => TryCheckCrisis("all", isDryRun: true, out response),
             EmergencyEventsCommandKind.TestCrisisCheck => TryCheckCrisis(request.Target, isDryRun: true, out response),
             EmergencyEventsCommandKind.TestCrisisBioZombies => TryRunBioSimulation(request.Number ?? 0, out response),
@@ -73,6 +78,7 @@ public sealed partial class Plugin
             EmergencyEventsCommandKind.TestCrisisConCheckpointCommit => TryRunContainmentCheckpoint(commit: true, out response),
             EmergencyEventsCommandKind.TestCrisisEndCheck => TryCheckCrisis("end", isDryRun: true, out response),
             EmergencyEventsCommandKind.TestCrisisEndSimulate => TryRunEndSimulation(request.Number ?? 0, out response),
+            EmergencyEventsCommandKind.TestDisorderEvent => TryRunDisorderEvent(request.Target, request.Number ?? 0, out response),
             EmergencyEventsCommandKind.Cleanup => TryFormatCleanup(out response),
             EmergencyEventsCommandKind.TestCleanupVerify => TryVerifyCleanup(out response),
             _ => RejectUnknownRequest(out response),
@@ -86,8 +92,9 @@ public sealed partial class Plugin
             "wave" => "【ee wave】\nstate | current | last | previous | history [数量] | history <WaveId> detail | timers | cap | survival",
             "dlrc" => "【ee dlrc】\nstate | evaluate | stage [full|raw] | breakdown | control | snapshot | history [数量]",
             "crisis" => "【ee crisis】\nstate | list | check all|bio|sys|con|sec|goi|war|end",
-            "test" => "【ee test】\ncrisis all | crisis bio zombies <数量> | crisis sys tier <0-5> | crisis sec foundation <数量> hostile <true|false> | crisis war <状态> | crisis con checkpoint [commit] | crisis end simulate <秒> | cleanup verify",
-            _ => "【EmergencyEvents】\nstatus | enable / disable | modules | round | wave | dlrc | crisis | health | config | version | test\n使用 ee help <wave|dlrc|crisis|test> 查看子命令。",
+            "disorder" or "fdi" => "【ee disorder / ee fdi】\nstate | events | history [数量] | explain",
+            "test" => "【ee test】\ncrisis ... | disorder event mtf-loss <数量> | cleanup verify",
+            _ => "【EmergencyEvents】\nstatus | enable / disable | modules | round | wave | dlrc | crisis | disorder | health | config | version | test\n使用 ee help <wave|dlrc|crisis|disorder|test> 查看子命令。",
         };
         return true;
     }
@@ -109,6 +116,7 @@ public sealed partial class Plugin
         AppendModuleSummary(builder, "M02 支援整合", Config.ReinforcementEnabled, reinforcementManager?.IsRoundActive == true);
         AppendModuleSummary(builder, "M03 D-LRC", Config.DlrcEvaluatorEnabled, dlrcEvaluatorService?.IsActive == true);
         AppendModuleSummary(builder, "M04 危机系统", Config.CrisisSystemEnabled, crisisManager is not null && runtime?.IsEmergencyEventsActiveForRound == true);
+        AppendModuleSummary(builder, "M04.5 Facility Disorder", Config.FacilityDisorder.Enabled, facilityDisorderManager?.State.IsActive == true);
         builder.AppendLine("M05 事件导演：未实现");
         AppendCurrentDlrcSummary(builder);
         AppendLatestWaveSummary(builder);
@@ -154,13 +162,14 @@ public sealed partial class Plugin
     private bool TryFormatConfig(out string response)
     {
         PrimaryWaveCaps caps = Config.PrimaryWaveCaps ?? new PrimaryWaveCaps();
-        response = $"【EmergencyEvents 配置】\nMinimumPlayers={Config.MinimumPlayers}\nWaveCaps：E{caps.E} D{caps.D} C{caps.C} B{caps.B} A{caps.A}\nTimer Extension：刷新方 +{Config.SpawningFactionTimerExtensionSeconds} 秒；另一方 +{Config.OpposingFactionTimerExtensionSeconds} 秒\nD-LRC：开始时间 {FormatSeconds(Config.DlrcEvaluatorStartTimeSeconds)}；周期 {Config.DlrcEvaluatorIntervalSeconds} 秒\n危机：CON 检查 {Config.CrisisContainmentCheckpointSeconds} 秒；END L3/L4/L5={Config.CrisisEndLevel3Seconds}/{Config.CrisisEndLevel4Seconds}/{Config.CrisisEndLevel5Seconds} 秒\n此命令只读，不支持 RA 修改配置。";
+        FacilityDisorderConfig disorder = Config.FacilityDisorder;
+        response = $"【EmergencyEvents 配置】\nMinimumPlayers={Config.MinimumPlayers}\nWaveCaps：E{caps.E} D{caps.D} C{caps.C} B{caps.B} A{caps.A}\nTimer Extension：刷新方 +{Config.SpawningFactionTimerExtensionSeconds} 秒；另一方 +{Config.OpposingFactionTimerExtensionSeconds} 秒\nD-LRC：开始时间 {FormatSeconds(Config.DlrcEvaluatorStartTimeSeconds)}；周期 {Config.DlrcEvaluatorIntervalSeconds} 秒\n危机：CON 检查 {Config.CrisisContainmentCheckpointSeconds} 秒；END L3/L4/L5={Config.CrisisEndLevel3Seconds}/{Config.CrisisEndLevel4Seconds}/{Config.CrisisEndLevel5Seconds} 秒\nFDI：Enabled={disorder.Enabled}; InitialBase={disorder.InitialBase:0.##}; Lookback={disorder.InitialLookbackSeconds}s; SettlementHistoryCapacity={disorder.SettlementHistoryCapacity}; EventHistoryCapacity={disorder.EventHistoryCapacity}; Bands={disorder.LowMaximum:0.##}/{disorder.MediumMaximum:0.##}/{disorder.HighMinimum:0.##}\n此命令只读，不支持 RA 修改配置。";
         return true;
     }
 
     private bool TryFormatHealth(out string response)
     {
-        response = $"【EmergencyEvents 健康检查】\nRuntimeState：{runtimeCoordinator?.State.ToString() ?? "ERROR"}\nRoundContextValid：{FormatBoolean(roundCoreManager?.State is not null)}\nM03 Running：{FormatBoolean(dlrcEvaluatorService?.IsActive == true)}；Busy：{FormatBoolean(dlrcEvaluatorService?.IsEvaluating == true)}；QueuedManualEvaluation：{FormatBoolean(dlrcEvaluatorService?.HasQueuedManualEvaluation == true)}；LastEvaluationValid：{FormatBoolean(dlrcEvaluatorService?.LastResult?.IsValid == true)}\nM04 LastAssessmentValid：{FormatBoolean(crisisManager?.CurrentCrisisAssessment is not null)}\nM02 Running：{FormatBoolean(reinforcementManager?.IsRoundActive == true)}；Mini-Wave Interceptor：{FormatBoolean(Config.DisableMiniWaves)}；WaveHistoryCount：{reinforcementManager?.GetMajorWaveRecords().Count ?? 0}\n最近错误数：暂无集中计数\n最近警告数：暂无集中计数";
+        response = $"【EmergencyEvents 健康检查】\nRuntimeState：{runtimeCoordinator?.State.ToString() ?? "ERROR"}\nRoundContextValid：{FormatBoolean(roundCoreManager?.State is not null)}\nM03 Running：{FormatBoolean(dlrcEvaluatorService?.IsActive == true)}；Busy：{FormatBoolean(dlrcEvaluatorService?.IsEvaluating == true)}；QueuedManualEvaluation：{FormatBoolean(dlrcEvaluatorService?.HasQueuedManualEvaluation == true)}；LastEvaluationValid：{FormatBoolean(dlrcEvaluatorService?.LastResult?.IsValid == true)}\nM04 LastAssessmentValid：{FormatBoolean(crisisManager?.CurrentCrisisAssessment is not null)}\nM04.5 FDI Running：{FormatBoolean(facilityDisorderManager?.State.IsActive == true)}；Suspended：{FormatBoolean(facilityDisorderManager?.State.IsSuspended == true)}；EventCount：{facilityDisorderManager?.Events.Count ?? 0}\nM02 Running：{FormatBoolean(reinforcementManager?.IsRoundActive == true)}；Mini-Wave Interceptor：{FormatBoolean(Config.DisableMiniWaves)}；WaveHistoryCount：{reinforcementManager?.GetMajorWaveRecords().Count ?? 0}\n最近错误数：暂无集中计数\n最近警告数：暂无集中计数";
         return true;
     }
 
@@ -171,6 +180,7 @@ public sealed partial class Plugin
         AppendModuleSummary(builder, "M02 Reinforcement", Config.ReinforcementEnabled, reinforcementManager?.IsRoundActive == true);
         AppendModuleSummary(builder, "M03 D-LRC", Config.DlrcEvaluatorEnabled, dlrcEvaluatorService?.IsActive == true);
         AppendModuleSummary(builder, "M04 Crisis", Config.CrisisSystemEnabled, crisisManager is not null && runtimeCoordinator?.IsEmergencyEventsActiveForRound == true);
+        AppendModuleSummary(builder, "M04.5 Facility Disorder", Config.FacilityDisorder.Enabled, facilityDisorderManager?.State.IsActive == true);
         builder.AppendLine("M05 Director：NOT_IMPLEMENTED");
         builder.AppendLine("M06 O4：NOT_IMPLEMENTED");
         builder.Append("M07 Event Packs：NOT_IMPLEMENTED");
@@ -187,9 +197,10 @@ public sealed partial class Plugin
             "reinforcement" or "wave" or "m02" => $"【M02 Reinforcement】\n状态：{GetModuleState(Config.ReinforcementEnabled, reinforcementManager?.IsRoundActive == true)}\nMini-Wave 禁用：{FormatBoolean(Config.DisableMiniWaves)}\nWaveHistory：{reinforcementManager?.GetMajorWaveRecords().Count ?? 0}",
             "dlrc" or "m03" => $"【M03 D-LRC】\n状态：{GetModuleState(Config.DlrcEvaluatorEnabled, dlrcEvaluatorService?.IsActive == true)}\n正在评估：{FormatBoolean(dlrcEvaluatorService?.IsEvaluating == true)}\n最后触发：{dlrcEvaluatorService?.LastTrigger.ToString() ?? "暂无"}",
             "crisis" or "m04" => $"【M04 Crisis】\n状态：{GetModuleState(Config.CrisisSystemEnabled, crisisManager is not null && runtimeCoordinator?.IsEmergencyEventsActiveForRound == true)}\n最近危机结果：{crisisManager?.CurrentCrisisAssessment?.Code ?? "暂无"}\nWAR：{FormatWarModuleState()}",
-            _ => "未知模块。使用 ee module <round|reinforcement|dlrc|crisis>。",
+            "disorder" or "fdi" or "m045" => $"【M04.5 Facility Disorder】\n状态：{GetModuleState(Config.FacilityDisorder.Enabled, facilityDisorderManager?.State.IsActive == true)}\n当前值：{facilityDisorderManager?.State.CurrentFacilityDisorder:0.##}\n区间：{facilityDisorderManager?.State.DisorderBand}\n最近结算：{FormatNullableTime(facilityDisorderManager?.State.LastSettlementAt)}",
+            _ => "未知模块。使用 ee module <round|reinforcement|dlrc|crisis|disorder>。",
         };
-        return normalized is "round" or "roundcore" or "m01" or "reinforcement" or "wave" or "m02" or "dlrc" or "m03" or "crisis" or "m04";
+        return normalized is "round" or "roundcore" or "m01" or "reinforcement" or "wave" or "m02" or "dlrc" or "m03" or "crisis" or "m04" or "disorder" or "fdi" or "m045";
     }
 
     private bool TryFormatRound(out string response)
@@ -587,8 +598,90 @@ public sealed partial class Plugin
 
     private bool TryFormatCleanup(out string response)
     {
-        response = $"【Cleanup 状态】\nCurrentRoundId：{roundCoreManager?.State?.RoundId.ToString() ?? "暂无"}\nCurrentWave：{reinforcementManager?.State?.MajorWaveHistory.CurrentWave?.WaveId ?? "暂无"}\nWaveHistoryCount：{reinforcementManager?.GetMajorWaveRecords().Count ?? 0}\nEvaluationHistoryCount：{dlrcEvaluatorService?.History.Count ?? 0}\nCrisisState：{crisisManager?.CurrentCrisisAssessment?.Code ?? "暂无"}\nPendingCoroutines：M02={reinforcementManager?.State?.ScheduledHandles.Count ?? 0}；M03={FormatBoolean(dlrcEvaluatorService?.HasScheduledEvaluation == true)}\n此命令只查询，不执行强制清理。";
+        response = $"【Cleanup 状态】\nCurrentRoundId：{roundCoreManager?.State?.RoundId.ToString() ?? "暂无"}\nCurrentWave：{reinforcementManager?.State?.MajorWaveHistory.CurrentWave?.WaveId ?? "暂无"}\nWaveHistoryCount：{reinforcementManager?.GetMajorWaveRecords().Count ?? 0}\nEvaluationHistoryCount：{dlrcEvaluatorService?.History.Count ?? 0}\nCrisisState：{crisisManager?.CurrentCrisisAssessment?.Code ?? "暂无"}\nFDI：Active={FormatBoolean(facilityDisorderManager?.State.IsActive == true)}；Events={facilityDisorderManager?.Events.Count ?? 0}；History={facilityDisorderManager?.History.Count ?? 0}\nPendingCoroutines：M02={reinforcementManager?.State?.ScheduledHandles.Count ?? 0}；M03={FormatBoolean(dlrcEvaluatorService?.HasScheduledEvaluation == true)}\n此命令只查询，不执行强制清理。";
         return true;
+    }
+
+    private bool TryFormatDisorderState(out string response)
+    {
+        FacilityDisorderRuntimeManager? manager = facilityDisorderManager;
+        if (manager is null)
+        {
+            response = "FDI 运行时尚未初始化。";
+            return false;
+        }
+
+        FacilityDisorderState state = manager.State;
+        CrisisAssessment? assessment = crisisManager?.CurrentCrisisAssessment;
+        response = $"【Facility Disorder 当前状态】\n状态：{GetModuleState(Config.FacilityDisorder.Enabled, state.IsActive)}\n本回合暂停：{FormatBoolean(state.IsSuspended)}\n当前 Facility Disorder：{state.CurrentFacilityDisorder:0.##} / 100\n区间：{state.DisorderBand}\n最近处理时间：{FormatNullableTime(state.LastProcessedAt)}\n最近结算：{FormatNullableTime(state.LastSettlementAt)}\n事件数：{manager.Events.Count}\n结算次数：{manager.History.Count}\n当前 D-LRC：{CurrentDlrcResult?.Code ?? "暂无"}\n当前 Crisis：{assessment?.Code ?? "暂无"}\n说明：FDI 只在正常 PERIODIC 完成并经过 Crisis 评估后结算。";
+        return true;
+    }
+
+    private bool TryFormatDisorderEvents(out string response)
+    {
+        FacilityDisorderRuntimeManager? manager = facilityDisorderManager;
+        if (manager is null)
+        {
+            response = "FDI 运行时尚未初始化。";
+            return false;
+        }
+
+        StringBuilder builder = new StringBuilder("【Facility Disorder 事件】\n");
+        foreach (DisorderEvent disorderEvent in manager.Events.OrderByDescending(item => item.Timestamp).Take(20))
+        {
+            builder.AppendLine($"{disorderEvent.Timestamp:O} | {disorderEvent.Category} | Δ={disorderEvent.Delta:0.####} | {disorderEvent.EventId} | {disorderEvent.Description}");
+        }
+
+        if (manager.Events.Count == 0)
+        {
+            builder.Append("暂无事件。 ");
+        }
+
+        response = builder.ToString().TrimEnd();
+        return true;
+    }
+
+    private bool TryFormatDisorderHistory(int? requestedCount, out string response)
+    {
+        FacilityDisorderRuntimeManager? manager = facilityDisorderManager;
+        if (manager is null)
+        {
+            response = "FDI 运行时尚未初始化。";
+            return false;
+        }
+
+        int count = Math.Min(Math.Max(requestedCount ?? 5, 1), 20);
+        StringBuilder builder = new StringBuilder($"【Facility Disorder 结算历史】最近 {count} 次\n");
+        foreach (FacilityDisorderSettlement settlement in manager.History.Reverse().Take(count))
+        {
+            builder.AppendLine($"{settlement.WindowEnd:O} | Window={settlement.WindowStart:O}→{settlement.WindowEnd:O} | {settlement.PreviousValue:0.##} + {settlement.Delta:0.##} = {settlement.CurrentValue:0.##} | Events={settlement.ProcessedEvents.Count}");
+        }
+
+        if (manager.History.Count == 0)
+        {
+            builder.Append("暂无 PERIODIC 结算。 ");
+        }
+
+        response = builder.ToString().TrimEnd();
+        return true;
+    }
+
+    private bool TryFormatDisorderExplain(out string response)
+    {
+        FacilityDisorderConfig config = Config.FacilityDisorder;
+        response = $"【Facility Disorder 规则】\n范围：{config.LowMinimum:0.##}–{config.HighMaximum:0.##}；LOW < {config.MediumMinimum:0.##}；MEDIUM < {config.HighMinimum:0.##}；HIGH ≥ {config.HighMinimum:0.##}\n首次：InitialBase={config.InitialBase:0.##} + 首次评估前 {config.InitialLookbackSeconds} 秒有效事件\n后续：严格处理 [LastProcessedAt, PeriodicTimestamp] 的新增事实，不使用 Now-30 秒窗口\n结算：只允许 PERIODIC；POST_MAJOR_WAVE、MANUAL、MANUAL_RA 只读\n原则：不改变 ResponseScore、Natural/Effective、Control、FinalLevel 或 CrisisSeverity\n权重状态：{(config.IsProvisionalBalance ? "临时平衡值" : "正式平衡值")}。";
+        return true;
+    }
+
+    private bool TryRunDisorderEvent(string eventName, int amount, out string response)
+    {
+        if (facilityDisorderManager is null)
+        {
+            response = "FDI 运行时尚未初始化。";
+            return false;
+        }
+
+        return facilityDisorderManager.TryDryRunEvent(eventName, amount, out response);
     }
 
     private bool TryVerifyCleanup(out string response)
@@ -596,7 +689,10 @@ public sealed partial class Plugin
         bool isClean = roundCoreManager?.State is null
             && (reinforcementManager?.GetMajorWaveRecords().Count ?? 0) == 0
             && (dlrcEvaluatorService?.History.Count ?? 0) == 0
-            && crisisManager?.CurrentCrisisAssessment is null;
+            && crisisManager?.CurrentCrisisAssessment is null
+            && (facilityDisorderManager?.Events.Count ?? 0) == 0
+            && (facilityDisorderManager?.History.Count ?? 0) == 0
+            && facilityDisorderManager?.State.IsInitialized != true;
         response = $"【Cleanup Verify】\nDRY RUN：是\n当前回合状态残留：{(isClean ? "未发现" : "存在")}";
         return isClean;
     }
@@ -987,6 +1083,11 @@ public sealed partial class Plugin
     private static string FormatRoundTime(DateTime timestamp)
     {
         return timestamp == default ? "暂无" : timestamp.ToLocalTime().ToString("HH:mm:ss");
+    }
+
+    private static string FormatNullableTime(DateTime? timestamp)
+    {
+        return timestamp.HasValue ? FormatRoundTime(timestamp.Value) : "暂无";
     }
 
     private static string FormatOptionalLine(string title, string value)

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using EmergencyEvents.Crisis;
 using EmergencyEvents.Crisis.Detectors;
+using EmergencyEvents.Disorder;
 using EmergencyEvents.Evaluation;
 using EmergencyEvents.RemoteAdminCommands;
 using EmergencyEvents.Reinforcement;
@@ -116,6 +117,29 @@ internal static class Program
             ("CON 快速检查默认只读而 commit 才推进正式状态", ContainmentDiagnosticCommitIsExplicit),
             ("END 快速模拟使用正式 Detector 且不改变真实时间", EndDiagnosticSimulationUsesIsolatedState),
             ("RA 语法接受 round state 作为 round 查询别名", EmergencyEventsCommandSyntaxRecognizesRoundStateAlias),
+            ("FDI 首次结算使用 120 秒回看窗口", FdiInitialSettlementUsesLookbackWindow),
+            ("FDI 后续结算只处理上次结算之后的新事件", FdiIncrementalSettlementUsesLastProcessedBoundary),
+            ("FDI MTF 变化事件去重且不重复计当前人数", FdiMtfChangesDoNotRepeat),
+            ("FDI 战斗方向事件保留正负方向", FdiCombatDirectionIsPreserved),
+            ("FDI 危机转换事件进入下一次周期结算", FdiCrisisTransitionsAreSettled),
+            ("FDI POST 和 MANUAL 评估只读", FdiSpecialEvaluationsAreReadOnly),
+            ("FDI 分数限制范围并正确映射区间", FdiScoreClampsAndMapsBands),
+            ("FDI 清理会清除事件、状态和窗口", FdiCleanupClearsRoundState),
+            ("FDI 低人口开局与中途降人口不可逆暂停", FdiLowPopulationSuspensionIsRoundLocked),
+            ("FDI 默认权重全部可配置且标记为临时平衡值", FdiConfigurationIsExplicit),
+            ("FDI RA 支持 disorder/fdi 查询和 dry-run 事件", FdiCommandSyntaxRecognizesCommands),
+            ("FDI 06:31 当前 MTF 存量只计算一次", FdiInitialStockIncludesMtfWithoutDoubleCounting),
+            ("FDI 06:31 当前 079 与 SYS 不重复计算", FdiInitial079AndSysDoNotDoubleCount),
+            ("FDI 06:31 WAR 与核弹状态不重复计算", FdiInitialWarAndWarheadDoNotDoubleCount),
+            ("FDI 06:31 当前危机存量只计算一次", FdiInitialCrisisStockIsIncluded),
+            ("FDI 首次结算后只应用新事件增量", FdiPostInitializationUsesPureIncrement),
+            ("FDI 无效危机评估不推进结算窗口", FdiInvalidCrisisAssessmentDoesNotAdvanceWindow),
+            ("FDI RoundId 不一致不推进结算窗口", FdiRoundIdMismatchDoesNotAdvanceWindow),
+            ("FDI 无效 Evaluation 不消费事件", FdiInvalidEvaluationDoesNotConsumeEvents),
+            ("FDI 失败周期后的下一次成功周期补处理事件", FdiSuccessfulPeriodicProcessesFailedWindow),
+            ("FDI FactionAdvantageChanged 默认 Delta 为零", FdiFactionAdvantageDefaultDeltaIsZero),
+            ("FDI 资源边界保留未结算事件并限制历史", FdiResourceBoundsPreservePendingEvents),
+            ("FDI 1000 次 Periodic 后历史和事件容器有界且不重复消费", FdiResourceBoundsRemainStableAfterThousandPeriodics),
         };
 
         string requestedModule = args.Length == 0 ? "ALL" : args[0].ToUpperInvariant();
@@ -124,7 +148,16 @@ internal static class Program
 
         for (int index = 0; index < tests.Length; index++)
         {
-            string module = index < 43 ? "M03" : index < 46 ? "M01" : index < 71 ? "M02" : "M04";
+            string module = tests[index].Name.StartsWith("FDI", StringComparison.Ordinal)
+                ? "FDI"
+                : index < 43 ? "M03" : index < 46 ? "M01" : index < 71 ? "M02" : "M04";
+            bool isRaTest = tests[index].Name.StartsWith("RA ", StringComparison.Ordinal)
+                || tests[index].Name.StartsWith("FDI RA", StringComparison.Ordinal);
+            if (requestedModule == "RA" && isRaTest)
+            {
+                module = "RA";
+            }
+
             if (requestedModule != "ALL" && requestedModule != module)
             {
                 continue;
@@ -958,6 +991,426 @@ internal static class Program
             EmergencyEventsCommandSyntax.TryParse(new[] { "round", "state" }, out EmergencyEventsCommandRequest request),
             "round state 必须被识别为回合状态查询");
         AssertEqual(EmergencyEventsCommandKind.Round, request.Kind, "round state 必须与 round 使用同一查询处理器");
+    }
+
+    private static void FdiInitialSettlementUsesLookbackWindow()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, InitialLookbackSeconds = 120 };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime at = Utc(6, 31);
+        service.StartRound(Utc(4, 0), 16);
+        service.Record(new DisorderEvent("old", at.AddSeconds(-121), DisorderEventCategory.CombatDeath, 20d));
+        service.Record(new DisorderEvent("inside", at.AddSeconds(-120), DisorderEventCategory.CombatDeath, 3d));
+        service.Record(new DisorderEvent("latest", at.AddSeconds(-1), DisorderEventCategory.MtfForceChanged, -2d));
+
+        FacilityDisorderSettlement? settlement = SettleFdi(service, at);
+        AssertTrue(settlement is not null, "首次 PERIODIC 必须初始化并结算");
+        AssertNear(51d, service.State.CurrentFacilityDisorder, "首次 FDI 必须使用 InitialBase 加回看窗口事件");
+        AssertEqual(at, service.State.LastProcessedAt, "首次结算必须记录实际周期时间");
+        AssertEqual(2, settlement!.ProcessedEvents.Count, "窗口外事件不得进入首次结算");
+    }
+
+    private static void FdiIncrementalSettlementUsesLastProcessedBoundary()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime first = Utc(6, 31);
+        DateTime second = first.AddSeconds(30);
+        service.StartRound(first.AddMinutes(-10), 16);
+        service.Record(new DisorderEvent("first", first, DisorderEventCategory.CombatDeath, 4d));
+        SettleFdi(service, first);
+        service.Record(new DisorderEvent("boundary", first, DisorderEventCategory.CombatDeath, 100d));
+        service.Record(new DisorderEvent("second", second, DisorderEventCategory.CombatDeath, 5d));
+
+        SettleFdi(service, second);
+        AssertNear(59d, service.State.CurrentFacilityDisorder, "后续周期只能处理 LastProcessedAt 之后的新事件");
+        AssertEqual(1, service.State.LastSettlement!.ProcessedEvents.Count, "后续窗口不得重复计算边界事件");
+    }
+
+    private static void FdiMtfChangesDoNotRepeat()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16);
+        service.Record(new DisorderEvent("wave-mtf", at, DisorderEventCategory.MtfForceChanged, -6d));
+        service.Record(new DisorderEvent("wave-mtf", at, DisorderEventCategory.MtfForceChanged, -6d));
+        SettleFdi(service, at);
+        AssertNear(44d, service.State.CurrentFacilityDisorder, "MTF 增援应降低 FDI 且重复 source id 只能计一次");
+        AssertEqual(1, service.State.LastSettlement!.ProcessedEvents.Count, "MTF 事件不得重复计入");
+    }
+
+    private static void FdiCombatDirectionIsPreserved()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16);
+        service.Record(new DisorderEvent("scp-kills-foundation", at, DisorderEventCategory.CombatDeath, 3d));
+        service.Record(new DisorderEvent("foundation-kills-chaos", at, DisorderEventCategory.CombatDeath, -2d));
+        service.Record(new DisorderEvent("scp-eliminated", at, DisorderEventCategory.ScpEliminated, -3d));
+        SettleFdi(service, at);
+        AssertNear(48d, service.State.CurrentFacilityDisorder, "战斗事件必须按方向累加正负变化");
+    }
+
+    private static void FdiCrisisTransitionsAreSettled()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16);
+        service.Record(new DisorderEvent("bio-l3", at, DisorderEventCategory.CrisisTransition, 3d));
+        service.Record(new DisorderEvent("bio-l4", at, DisorderEventCategory.CrisisTransition, 4d));
+        service.Record(new DisorderEvent("bio-resolved", at, DisorderEventCategory.CrisisTransition, -4d));
+        SettleFdi(service, at);
+        AssertNear(53d, service.State.CurrentFacilityDisorder, "危机状态转换应只通过事件影响 FDI");
+    }
+
+    private static void FdiSpecialEvaluationsAreReadOnly()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime periodic = Utc(6, 31);
+        service.StartRound(periodic.AddMinutes(-5), 16);
+        service.Record(new DisorderEvent("periodic", periodic, DisorderEventCategory.CombatDeath, 2d));
+        SettleFdi(service, periodic);
+        DateTime before = service.State.LastProcessedAt!.Value;
+        double score = service.State.CurrentFacilityDisorder;
+        service.Record(new DisorderEvent("post", periodic.AddSeconds(10), DisorderEventCategory.CombatDeath, 20d));
+        AssertTrue(service.ObserveEvaluation(periodic.AddSeconds(10), DlrcEvaluationTrigger.POST_MAJOR_WAVE), "POST 必须被识别为只读评估");
+        AssertTrue(service.ObserveEvaluation(periodic.AddSeconds(20), DlrcEvaluationTrigger.MANUAL_RA), "MANUAL_RA 必须被识别为只读评估");
+        AssertEqual(before, service.State.LastProcessedAt, "特殊评估不得推进 FDI 时间窗口");
+        AssertNear(score, service.State.CurrentFacilityDisorder, "特殊评估不得改变 FDI 分数");
+        SettleFdi(service, periodic.AddSeconds(30));
+        AssertNear(72d, service.State.CurrentFacilityDisorder, "特殊评估观察到的事实应留给后续 PERIODIC 结算");
+    }
+
+    private static void FdiScoreClampsAndMapsBands()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16);
+        service.Record(new DisorderEvent("high", at, DisorderEventCategory.WarheadChanged, 1000d));
+        SettleFdi(service, at);
+        AssertNear(100d, service.State.CurrentFacilityDisorder, "FDI 必须封顶 100");
+        AssertEqual(FacilityDisorderBand.HIGH, service.State.DisorderBand, "60-100 必须映射 HIGH");
+        service.Record(new DisorderEvent("low", at.AddSeconds(30), DisorderEventCategory.WarheadChanged, -1000d));
+        SettleFdi(service, at.AddSeconds(30));
+        AssertNear(0d, service.State.CurrentFacilityDisorder, "FDI 必须封底 0");
+        AssertEqual(FacilityDisorderBand.LOW, service.State.DisorderBand, "0-29 必须映射 LOW");
+    }
+
+    private static void FdiCleanupClearsRoundState()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16);
+        service.Record(new DisorderEvent("cleanup", at, DisorderEventCategory.CombatDeath, 2d));
+        SettleFdi(service, at);
+        service.CleanupRound();
+        AssertTrue(!service.State.IsActive && !service.State.IsInitialized, "清理后 FDI 必须失活且未初始化");
+        AssertEqual(0, service.EventCount, "清理后不得残留事件历史");
+        AssertTrue(SettleFdi(service, at.AddMinutes(1)) is null, "清理后不得继续结算上一局");
+    }
+
+    private static void FdiLowPopulationSuspensionIsRoundLocked()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 15);
+        AssertTrue(!service.State.IsActive, "不足 16 人开局时 FDI 必须完全不启动");
+        service.StartRound(at.AddMinutes(-5), 16);
+        service.ObservePopulation(15);
+        AssertTrue(service.State.IsSuspended, "活动回合降到 15 人必须暂停 FDI");
+        service.ObservePopulation(20);
+        AssertTrue(service.State.IsSuspended && !service.State.IsActive, "本回合暂停必须不可逆");
+    }
+
+    private static void FdiConfigurationIsExplicit()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig();
+        AssertTrue(config.IsProvisionalBalance, "默认 FDI 权重必须明确标记为临时平衡值");
+        AssertEqual(50d, config.InitialBase, "默认 InitialBase 必须为 50");
+        AssertEqual(120, config.InitialLookbackSeconds, "默认首次回看必须为 120 秒");
+        AssertEqual(256, config.SettlementHistoryCapacity, "默认结算历史容量必须为最近 256 条");
+        AssertEqual(512, config.EventHistoryCapacity, "默认事件历史容量必须为最近 512 条");
+        AssertTrue(config.MtfLossPerCombatant > 0d && config.MtfGainPerCombatant < 0d, "MTF 增减方向必须可配置");
+        AssertTrue(config.LowMaximum > config.LowMinimum && config.HighMinimum > config.MediumMaximum, "FDI 区间边界必须可配置");
+    }
+
+    private static void FdiCommandSyntaxRecognizesCommands()
+    {
+        (string[] Arguments, EmergencyEventsCommandKind Expected)[] commands =
+        {
+            (new[] { "disorder" }, EmergencyEventsCommandKind.DisorderState),
+            (new[] { "fdi", "events" }, EmergencyEventsCommandKind.DisorderEvents),
+            (new[] { "disorder", "history", "10" }, EmergencyEventsCommandKind.DisorderHistory),
+            (new[] { "test", "disorder", "event", "mtf-loss", "3" }, EmergencyEventsCommandKind.TestDisorderEvent),
+        };
+
+        foreach ((string[] arguments, EmergencyEventsCommandKind expected) in commands)
+        {
+            AssertTrue(EmergencyEventsCommandSyntax.TryParse(arguments, out EmergencyEventsCommandRequest request), $"FDI RA 语法未识别：{string.Join(" ", arguments)}");
+            AssertEqual(expected, request.Kind, $"FDI RA 命令类型错误：{string.Join(" ", arguments)}");
+        }
+    }
+
+    private static void FdiInitialStockIncludesMtfWithoutDoubleCounting()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16, 11);
+        service.Record(new DisorderEvent("mtf-wave", at.AddMinutes(-151), DisorderEventCategory.MtfForceChanged, -6d, "04:00 MTF 0->6;仍存活", isRepresentedByCurrentStock: true));
+
+        FacilityDisorderSettlement? settlement = SettleFdi(
+            service,
+            at,
+            new FacilityDisorderStockSnapshot(mtfCount: 6, chaosCount: 0, zombieCount: 0, currentHostileForce: 0, scp079Present: false, scp079Tier: 0, crisisAssessment: null, warheadUnlocked: false, warheadActive: false, warheadDetonated: false),
+            roundId: 11);
+
+        AssertTrue(settlement is not null, "有效的首次 PERIODIC 必须结算");
+        AssertNear(44d, service.State.CurrentFacilityDisorder, "MTF 存量应只通过 CurrentStockAdjustment 计算一次");
+        AssertNear(-6d, settlement!.CurrentStockAdjustment, "MTF 当前存量调整错误");
+        AssertNear(0d, settlement.RecentTransientDelta, "已由当前存量表达的 MTF 变化不得再次进入窗口 Delta");
+    }
+
+    private static void FdiInitial079AndSysDoNotDoubleCount()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, CurrentScp079Tier = 2d, CurrentCrisisPerLevel = 1d };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16, 12);
+        service.Record(new DisorderEvent("079-established", at.AddMinutes(-151), DisorderEventCategory.Scp079TierChanged, 2d, "04:00 Tier3;仍为Tier3", isRepresentedByCurrentStock: true));
+        service.Record(new DisorderEvent("079-upgrade", at.AddMinutes(-61), DisorderEventCategory.Scp079TierChanged, 2d, "05:30 T2->T3;ExpressedBySYS", isRepresentedByCurrentStock: true));
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 12, timestamp: at, scp079Present: true, scp079Tier: 3);
+        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, (CrisisTag.SYS, CrisisSeverity.Level3));
+
+        FacilityDisorderSettlement? settlement = SettleFdi(service, at, CreateStock(snapshot, assessment), 12, assessment);
+
+        AssertTrue(settlement is not null, "SYS 存量测试必须结算");
+        AssertNear(53d, service.State.CurrentFacilityDisorder, "SYS 已表达 079 Tier3 时不得再叠加 079 Tier Delta");
+        AssertNear(3d, settlement!.CurrentStockAdjustment, "SYS L3 当前存量调整错误");
+        AssertNear(0d, settlement.RecentTransientDelta, "已由 SYS 表达的 079 变化不得重复进入首次窗口");
+    }
+
+    private static void FdiInitialWarAndWarheadDoNotDoubleCount()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, CurrentCrisisPerLevel = 1d };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16, 13);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 13, timestamp: at, warheadUnlocked: true, warheadActive: true);
+        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, (CrisisTag.WAR, CrisisSeverity.Level4));
+        FacilityDisorderSettlement? settlement = SettleFdi(service, at, CreateStock(snapshot, assessment), 13, assessment);
+
+        AssertTrue(settlement is not null, "WAR 存量测试必须结算");
+        AssertNear(54d, service.State.CurrentFacilityDisorder, "WAR 危机已表达核弹状态时不得重复计算 Unlock/Countdown");
+        AssertNear(4d, settlement!.CurrentStockAdjustment, "WAR L4 当前存量调整错误");
+    }
+
+    private static void FdiInitialCrisisStockIsIncluded()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, CurrentCrisisPerLevel = 1d };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16, 14);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 14, timestamp: at);
+        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, (CrisisTag.BIO, CrisisSeverity.Level3));
+        service.Record(new DisorderEvent("sys-active", at.AddMinutes(-151), DisorderEventCategory.CrisisTransition, 3d, "04:00 SYS active;仍为Active", isRepresentedByCurrentStock: true));
+        FacilityDisorderSettlement? settlement = SettleFdi(service, at, CreateStock(snapshot, assessment), 14, assessment);
+
+        AssertTrue(settlement is not null, "危机存量测试必须结算");
+        AssertNear(53d, service.State.CurrentFacilityDisorder, "06:31 当前危机状态必须进入 InitialFDI");
+    }
+
+    private static void FdiPostInitializationUsesPureIncrement()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime first = Utc(6, 31);
+        service.StartRound(first.AddMinutes(-5), 16, 20);
+        SettleFdi(service, first, new FacilityDisorderStockSnapshot(6, 0, 0, 0, false, 0, null, false, false, false), roundId: 20);
+        service.Record(new DisorderEvent("new-event", first.AddSeconds(30), DisorderEventCategory.CombatDeath, 5d));
+
+        FacilityDisorderSettlement? second = SettleFdi(
+            service,
+            first.AddSeconds(30),
+            new FacilityDisorderStockSnapshot(0, 0, 0, 0, false, 0, null, true, true, false),
+            evaluationId: 21,
+            roundId: 20);
+
+        AssertTrue(second is not null, "首次结算后的 PERIODIC 必须继续结算");
+        AssertNear(0d, second!.CurrentStockAdjustment, "后续纯增量结算不得重新应用 CurrentStockAdjustment");
+        AssertNear(5d, second.RecentTransientDelta, "后续周期必须只处理新事件增量");
+        AssertNear(49d, service.State.CurrentFacilityDisorder, "后续周期应保持首次存量结果并只加新事件");
+    }
+
+    private static void FdiInvalidCrisisAssessmentDoesNotAdvanceWindow()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16, 15);
+        service.Record(new DisorderEvent("pending", at, DisorderEventCategory.CombatDeath, 5d));
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 15, timestamp: at);
+        DlrcEvaluationCompletedEvent evaluation = CreateEvaluation(snapshot, 15);
+
+        AssertTrue(service.SettlePeriodic(new FacilityDisorderEvaluationContext(evaluation, null), CreateStock(snapshot, null)) is null, "无效 CrisisAssessment 不得结算");
+        AssertTrue(!service.State.LastProcessedAt.HasValue && !service.State.LastSettlementAt.HasValue, "无效 CrisisAssessment 不得推进窗口");
+        AssertEqual(1, service.EventCount, "无效 CrisisAssessment 不得消费事件");
+    }
+
+    private static void FdiRoundIdMismatchDoesNotAdvanceWindow()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16, 16);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 17, timestamp: at);
+        DlrcEvaluationCompletedEvent evaluation = CreateEvaluation(snapshot, 17);
+        CrisisAssessment assessment = CreateCrisisAssessment(snapshot);
+
+        AssertTrue(service.SettlePeriodic(new FacilityDisorderEvaluationContext(evaluation, assessment), CreateStock(snapshot, assessment)) is null, "RoundId 不一致不得结算");
+        AssertTrue(!service.State.LastProcessedAt.HasValue && !service.State.LastSettlementAt.HasValue, "RoundId 不一致不得推进窗口");
+    }
+
+    private static void FdiInvalidEvaluationDoesNotConsumeEvents()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime at = Utc(6, 31);
+        service.StartRound(at.AddMinutes(-5), 16, 18);
+        service.Record(new DisorderEvent("invalid-evaluation-event", at, DisorderEventCategory.CombatDeath, 7d));
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 18, timestamp: at);
+        DlrcEvaluationResult invalidResult = CreateInvalidResult(CreateResult(snapshot));
+        DlrcEvaluationCompletedEvent evaluation = new DlrcEvaluationCompletedEvent(18, DlrcEvaluationTrigger.PERIODIC, snapshot, invalidResult);
+        CrisisAssessment assessment = new CrisisAssessment(18, DlrcEvaluationTrigger.PERIODIC, snapshot, invalidResult, Array.Empty<CrisisDetectionResult>());
+
+        AssertTrue(service.SettlePeriodic(new FacilityDisorderEvaluationContext(evaluation, assessment), CreateStock(snapshot, assessment)) is null, "无效 Evaluation 不得结算");
+        AssertTrue(!service.State.LastProcessedAt.HasValue && !service.State.LastSettlementAt.HasValue, "无效 Evaluation 不得推进时间状态");
+        AssertEqual(1, service.EventCount, "无效 Evaluation 不得消费事件");
+    }
+
+    private static void FdiSuccessfulPeriodicProcessesFailedWindow()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime failedAt = Utc(6, 31);
+        DateTime successAt = failedAt.AddMinutes(1);
+        service.StartRound(failedAt.AddMinutes(-5), 16, 19);
+        service.Record(new DisorderEvent("after-failure", failedAt.AddSeconds(10), DisorderEventCategory.CombatDeath, 6d));
+        RoundSnapshot failedSnapshot = CreateSnapshot(roundId: 19, timestamp: failedAt);
+        DlrcEvaluationResult invalidResult = CreateInvalidResult(CreateResult(failedSnapshot));
+        DlrcEvaluationCompletedEvent failedEvaluation = new DlrcEvaluationCompletedEvent(19, DlrcEvaluationTrigger.PERIODIC, failedSnapshot, invalidResult);
+        CrisisAssessment failedAssessment = new CrisisAssessment(19, DlrcEvaluationTrigger.PERIODIC, failedSnapshot, invalidResult, Array.Empty<CrisisDetectionResult>());
+        AssertTrue(service.SettlePeriodic(new FacilityDisorderEvaluationContext(failedEvaluation, failedAssessment), CreateStock(failedSnapshot, failedAssessment)) is null, "失败周期不得结算");
+
+        RoundSnapshot successSnapshot = CreateSnapshot(roundId: 19, timestamp: successAt);
+        FacilityDisorderSettlement? settlement = SettleFdi(service, successAt, CreateStock(successSnapshot, null), 20, null, roundId: 19);
+        AssertTrue(settlement is not null, "下一次成功 PERIODIC 必须补处理失败窗口");
+        AssertNear(56d, service.State.CurrentFacilityDisorder, "失败周期留下的事件必须在下一次成功周期结算");
+        AssertEqual(successAt, service.State.LastProcessedAt, "成功周期才可推进 LastProcessedAt");
+    }
+
+    private static void FdiFactionAdvantageDefaultDeltaIsZero()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig();
+        AssertNear(0d, config.FactionAdvantageChanged, "FactionAdvantageChanged 默认只记录事实，不应产生 Delta");
+        DisorderEvent eventFact = new DisorderEvent("advantage", Utc(6, 31), DisorderEventCategory.FactionAdvantageChanged, config.FactionAdvantageChanged, "history-only");
+        AssertNear(0d, eventFact.Delta, "FactionAdvantageChanged 事件默认 Delta 必须为零");
+    }
+
+    private static void FdiResourceBoundsPreservePendingEvents()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime first = Utc(6, 31);
+        DateTime pendingAt = first.AddSeconds(1);
+        service.StartRound(first.AddMinutes(-5), 16);
+        service.Record(new DisorderEvent("pending", pendingAt, DisorderEventCategory.CombatDeath, 7d));
+
+        SettleFdi(service, first);
+        AssertEqual(1, service.EventCount, "尚未到结算窗口的事件不得被容量淘汰");
+
+        SettleFdi(service, pendingAt.AddSeconds(1), evaluationId: 2);
+        AssertNear(57d, service.State.CurrentFacilityDisorder, "保留的未结算事件必须在下一次窗口正常结算");
+    }
+
+    private static void FdiResourceBoundsRemainStableAfterThousandPeriodics()
+    {
+        FacilityDisorderService service = NewFdiService();
+        DateTime first = Utc(6, 31);
+        service.StartRound(first.AddMinutes(-5), 16);
+
+        for (int index = 0; index < 1000; index++)
+        {
+            DateTime timestamp = first.AddSeconds(index);
+            service.Record(new DisorderEvent($"bounded-{index}", timestamp, DisorderEventCategory.CombatDeath, 1d));
+            SettleFdi(service, timestamp, evaluationId: index + 1);
+        }
+
+        AssertEqual(256, service.History.Count, "结算历史必须限制为最近 256 条");
+        AssertTrue(service.EventCount <= 512, "已结算事件和 dedup 集合必须限制在最近 512 条以内");
+        AssertNear(100d, service.State.CurrentFacilityDisorder, "1000 次 Periodic 后 FDI 结果必须保持封顶正确");
+        AssertTrue(service.State.LastSettlement is not null, "历史淘汰后最近一次结算详情必须保留");
+
+        DateTime duplicateAt = first.AddSeconds(1001);
+        service.Record(new DisorderEvent("bounded-0", first, DisorderEventCategory.CombatDeath, 1000d));
+        double beforeDuplicate = service.State.CurrentFacilityDisorder;
+        FacilityDisorderSettlement? duplicateSettlement = SettleFdi(service, duplicateAt, evaluationId: 1001);
+        AssertNear(beforeDuplicate, service.State.CurrentFacilityDisorder, "淘汰旧 dedup ID 后旧时间戳事件不得重新结算");
+        AssertEqual(0, duplicateSettlement!.ProcessedEvents.Count, "旧重复事件不得进入新结算");
+    }
+
+    private static DlrcEvaluationCompletedEvent CreateEvaluation(RoundSnapshot snapshot, long evaluationId)
+    {
+        return new DlrcEvaluationCompletedEvent(evaluationId, DlrcEvaluationTrigger.PERIODIC, snapshot, CreateResult(snapshot));
+    }
+
+    private static CrisisAssessment CreateCrisisAssessment(
+        RoundSnapshot snapshot,
+        params (CrisisTag Tag, CrisisSeverity Severity)[] activeTags)
+    {
+        DlrcEvaluationResult result = CreateResult(snapshot);
+        List<CrisisDetectionResult> detections = new List<CrisisDetectionResult>();
+        foreach ((CrisisTag tag, CrisisSeverity severity) in activeTags)
+        {
+            detections.Add(new CrisisDetectionResult(tag, true, severity, "test"));
+        }
+        return new CrisisAssessment(snapshot.RoundId, DlrcEvaluationTrigger.PERIODIC, snapshot, result, detections);
+    }
+
+    private static FacilityDisorderStockSnapshot CreateStock(RoundSnapshot snapshot, CrisisAssessment? assessment)
+    {
+        return new FacilityDisorderStockSnapshot(
+            snapshot.FoundationCombatants,
+            snapshot.ChaosCombatants,
+            snapshot.Scp0492Count,
+            snapshot.MainScpAlive + snapshot.OtherHostileCombatants + snapshot.HostileThirdPartyCombatants,
+            snapshot.Scp079Present,
+            snapshot.Scp079Tier,
+            assessment,
+            snapshot.WarheadUnlocked,
+            snapshot.WarheadActive,
+            snapshot.WarheadDetonated);
+    }
+
+    private static FacilityDisorderSettlement? SettleFdi(
+        FacilityDisorderService service,
+        DateTime timestamp,
+        FacilityDisorderStockSnapshot? stock = null,
+        long evaluationId = 1,
+        CrisisAssessment? assessment = null,
+        DlrcEvaluationTrigger trigger = DlrcEvaluationTrigger.PERIODIC,
+        long roundId = 0)
+    {
+        long resolvedRoundId = roundId == 0 ? evaluationId : roundId;
+        RoundSnapshot snapshot = CreateSnapshot(roundId: resolvedRoundId, timestamp: timestamp);
+        DlrcEvaluationCompletedEvent evaluation = new DlrcEvaluationCompletedEvent(evaluationId, trigger, snapshot, CreateResult(snapshot));
+        CrisisAssessment resolvedAssessment = assessment ?? new CrisisAssessment(evaluationId, trigger, snapshot, evaluation.Result, Array.Empty<CrisisDetectionResult>());
+        return service.SettlePeriodic(
+            new FacilityDisorderEvaluationContext(evaluation, resolvedAssessment),
+            stock ?? CreateStock(snapshot, resolvedAssessment));
+    }
+
+    private static FacilityDisorderService NewFdiService()
+    {
+        return new FacilityDisorderService(new FacilityDisorderConfig { InitialBase = 50d, InitialLookbackSeconds = 120 });
+    }
+
+    private static DateTime Utc(int minute, int second)
+    {
+        return new DateTime(2026, 8, 25, 6, minute, second, DateTimeKind.Utc);
     }
 
     private static CrisisDetectionResult Detect(ICrisisDetector detector, RoundSnapshot snapshot, CrisisState state)

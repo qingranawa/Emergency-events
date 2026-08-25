@@ -79,6 +79,7 @@ public sealed class EmergencyEventsCommand : ICommand
             or EmergencyEventsCommandKind.TestCrisisConCheckpointCommit
             or EmergencyEventsCommandKind.TestCrisisEndCheck
             or EmergencyEventsCommandKind.TestCrisisEndSimulate
+            or EmergencyEventsCommandKind.TestDisorderEvent
             or EmergencyEventsCommandKind.TestCleanupVerify;
     }
 

@@ -39,6 +39,7 @@ public static class EmergencyEventsCommandSyntax
             "wave" => TryParseWave(values, out request),
             "dlrc" => TryParseDlrc(values, out request),
             "crisis" => TryParseCrisis(values, out request),
+            "disorder" or "fdi" => TryParseDisorder(values, out request),
             "test" => TryParseTest(values, out request),
             _ => Reject(out request),
         };
@@ -106,7 +107,7 @@ public static class EmergencyEventsCommandSyntax
         }
 
         string target = values.Length == 2 ? Normalize(values[1]) : string.Empty;
-        if (target is "wave" or "dlrc" or "crisis" or "test")
+        if (target is "wave" or "dlrc" or "crisis" or "disorder" or "fdi" or "test")
         {
             request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.Help, target: target);
             return true;
@@ -254,6 +255,19 @@ public static class EmergencyEventsCommandSyntax
             return true;
         }
 
+        if (values.Length == 5
+            && Normalize(values[1]) == "disorder"
+            && Normalize(values[2]) == "event"
+            && !string.IsNullOrWhiteSpace(values[3])
+            && TryPositiveNumber(values[4], out int eventAmount))
+        {
+            request = new EmergencyEventsCommandRequest(
+                EmergencyEventsCommandKind.TestDisorderEvent,
+                target: Normalize(values[3]),
+                number: eventAmount);
+            return true;
+        }
+
         if (values.Length < 3 || Normalize(values[1]) != "crisis")
         {
             return Reject(out request);
@@ -273,6 +287,42 @@ public static class EmergencyEventsCommandSyntax
             "end" when values.Length == 5 && Normalize(values[3]) == "simulate" && TryNonNegativeNumber(values[4], out int seconds) => Accept(EmergencyEventsCommandKind.TestCrisisEndSimulate, seconds, out request),
             _ => Reject(out request),
         };
+    }
+
+    private static bool TryParseDisorder(string[] values, out EmergencyEventsCommandRequest request)
+    {
+        if (values.Length == 1 || (values.Length == 2 && Normalize(values[1]) == "state"))
+        {
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.DisorderState);
+            return true;
+        }
+
+        string subcommand = Normalize(values[1]);
+        if (values.Length == 2 && subcommand == "events")
+        {
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.DisorderEvents);
+            return true;
+        }
+
+        if (values.Length == 2 && subcommand == "explain")
+        {
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.DisorderExplain);
+            return true;
+        }
+
+        if (subcommand == "history" && values.Length == 2)
+        {
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.DisorderHistory);
+            return true;
+        }
+
+        if (subcommand == "history" && values.Length == 3 && int.TryParse(values[2], out int count) && count > 0)
+        {
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.DisorderHistory, number: count);
+            return true;
+        }
+
+        return Reject(out request);
     }
 
     private static bool Accept(EmergencyEventsCommandKind kind, out EmergencyEventsCommandRequest request)
@@ -308,7 +358,7 @@ public static class EmergencyEventsCommandSyntax
     private static bool IsModuleName(string value)
     {
         string normalized = Normalize(value);
-        return normalized is "round" or "roundcore" or "m01" or "reinforcement" or "wave" or "m02" or "dlrc" or "m03" or "crisis" or "m04";
+        return normalized is "round" or "roundcore" or "m01" or "reinforcement" or "wave" or "m02" or "dlrc" or "m03" or "crisis" or "m04" or "disorder" or "fdi" or "m045";
     }
 
     private static bool IsCrisisTarget(string value)

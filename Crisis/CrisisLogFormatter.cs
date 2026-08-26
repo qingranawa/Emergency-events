@@ -25,7 +25,7 @@ public static class CrisisLogFormatter
                 continue;
             }
 
-            builder.Append($"; {detection.Tag}:Active={detection.IsActive};Severity={(int)detection.Severity};Reason={detection.Reason};Metrics=");
+            builder.Append($"; {detection.Tag}:Active={detection.IsActive};Reason={detection.Reason};Metrics=");
             AppendMetrics(builder, detection.Metrics);
         }
 

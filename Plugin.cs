@@ -29,6 +29,7 @@ public sealed partial class Plugin : Plugin<Config>
     private FacilityDisorderRuntimeManager? facilityDisorderManager;
     private EventDirectorRuntimeManager? eventDirectorManager;
     private PluginRuntimeCoordinator? runtimeCoordinator;
+    private readonly IFacilityStateProvider facilityStateProvider = new SnapshotFacilityStateProvider();
 
     public override string Name => "EmergencyEvents";
 
@@ -375,7 +376,7 @@ public sealed partial class Plugin : Plugin<Config>
             facilityDisorderManager?.State,
             reinforcementManager?.GetMajorWaveRecords() ?? Array.Empty<MajorWaveRecord>(),
             CreateDirectorPersonnelFacts(completedEvent.Snapshot),
-            FacilityState.Normal,
+            facilityStateProvider.GetState(completedEvent.Snapshot),
             hasO4Selector: false);
     }
 
@@ -404,8 +405,6 @@ public sealed partial class Plugin : Plugin<Config>
             Config.CrisisSecurityThresholdsA,
             Config.CrisisContainmentCheckpointSeconds,
             Config.CrisisContainmentEquivalentReduction,
-            Config.CrisisEndLevel3Seconds,
-            Config.CrisisEndLevel4Seconds,
-            Config.CrisisEndLevel5Seconds);
+            Config.CrisisEndActivationSeconds);
     }
 }

@@ -147,25 +147,76 @@ public sealed class EventDirector
         {
             IsBusy = false;
         }
+        else if (nextState == EventLifecycleState.RolledBack)
+        {
+            ReleaseCurrentCycle();
+        }
 
         return true;
     }
 
-    public bool Commit(EventCandidate candidate, DirectorSlot slot, DateTime committedAt)
+    public bool RevalidateBeforeCommit(DirectorContext latestContext)
     {
-        if (CurrentCycle is null
-            || CurrentCycle.State != EventLifecycleState.Started
-            || candidate is null
-            || !IsSelected(candidate, slot))
+        if (CurrentCycle is null || CurrentCycle.State != EventLifecycleState.Started)
         {
             return false;
         }
+
+        return RevalidateCandidates(latestContext);
+    }
+
+    /// <summary>
+    /// 使用启动前的最新官方事实重验证并启动当前周期。
+    /// </summary>
+    public bool TryStart(DirectorContext latestContext, DateTime startedAt)
+    {
+        if (CurrentCycle is null || CurrentCycle.State != EventLifecycleState.Prepared)
+        {
+            return false;
+        }
+
+        if (!RevalidateCandidates(latestContext))
+        {
+            return false;
+        }
+
+        return Advance(EventLifecycleState.Started, true, startedAt);
+    }
+
+    public bool Commit(
+        EventCandidate candidate,
+        DirectorSlot slot,
+        DateTime committedAt,
+        DirectorContext? latestContext = null)
+    {
+        if (latestContext is not null && !RevalidateBeforeCommit(latestContext))
+        {
+            return false;
+        }
+
+        if (CurrentCycle is null
+            || CurrentCycle.State != EventLifecycleState.Started
+            || candidate is null)
+        {
+            return false;
+        }
+
+        EventCandidate? selectedCandidate = slot == DirectorSlot.Support
+            ? CurrentCycle.SelectedSupport
+            : CurrentCycle.SelectedNonSupport;
+        if (selectedCandidate is null
+            || !string.Equals(selectedCandidate.Definition.EventId, candidate.Definition.EventId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        candidate = selectedCandidate;
 
         if (candidate.Definition.IsProfessionalResponse)
         {
             foreach (var tag in candidate.Definition.RequiredCrisisTags)
             {
-                if (!Tracker.CanConsume(tag, candidate.Definition.RequiredCrisisSeverity))
+                if (!Tracker.CanConsume(tag, candidate.Definition.RequiredResponseLevel))
                 {
                     return false;
                 }
@@ -173,7 +224,7 @@ public sealed class EventDirector
 
             foreach (var tag in candidate.Definition.RequiredCrisisTags)
             {
-                Tracker.Consume(tag, candidate.Definition.RequiredCrisisSeverity, CurrentCycle.CycleId.ToString());
+                Tracker.Consume(tag, candidate.Definition.RequiredResponseLevel, CurrentCycle.CycleId.ToString());
             }
         }
 
@@ -226,11 +277,65 @@ public sealed class EventDirector
         logs.Clear();
     }
 
-    private bool IsSelected(EventCandidate candidate, DirectorSlot slot)
+    private EventCandidate? RevalidateCandidate(EventCandidate? candidate, DirectorContext context)
     {
-        return slot == DirectorSlot.Support
-            ? ReferenceEquals(CurrentCycle!.SelectedSupport, candidate)
-            : ReferenceEquals(CurrentCycle!.SelectedNonSupport, candidate);
+        if (candidate is null)
+        {
+            return null;
+        }
+
+        EventCandidate refreshed = eligibility.Evaluate(context, candidate.Definition, Tracker);
+        return refreshed.IsLegal ? refreshed : null;
+    }
+
+    private bool RevalidateCandidates(DirectorContext latestContext)
+    {
+        if (CurrentCycle is null)
+        {
+            return false;
+        }
+
+        if (latestContext is null || latestContext.RoundId != latestContext.DlrcResult?.RoundId)
+        {
+            AbortCurrentCycle("RevalidationFailed", latestContext?.Timestamp ?? DateTime.UtcNow);
+            return false;
+        }
+
+        Tracker.Observe(latestContext.CrisisAssessment);
+
+        EventCandidate? support = RevalidateCandidate(CurrentCycle.SelectedSupport, latestContext);
+        EventCandidate? nonSupport = RevalidateCandidate(CurrentCycle.SelectedNonSupport, latestContext);
+        if ((CurrentCycle.SelectedSupport is not null && support is null)
+            || (CurrentCycle.SelectedNonSupport is not null && nonSupport is null))
+        {
+            AbortCurrentCycle("RevalidationFailed", latestContext.Timestamp);
+            return false;
+        }
+
+        CurrentCycle.SelectedSupport = support;
+        CurrentCycle.SelectedNonSupport = nonSupport;
+        return true;
+    }
+
+    private void AbortCurrentCycle(string reason, DateTime at)
+    {
+        if (CurrentCycle is null)
+        {
+            return;
+        }
+
+        CurrentCycle.State = EventLifecycleState.Failed;
+        AddLog(new DirectorLogEntry(at, CurrentCycle.CycleId, string.Empty, EventLifecycleState.Failed, false, reason));
+        CurrentCycle.State = EventLifecycleState.RolledBack;
+        AddLog(new DirectorLogEntry(at, CurrentCycle.CycleId, string.Empty, EventLifecycleState.RolledBack, true, reason));
+        ReleaseCurrentCycle();
+    }
+
+    private void ReleaseCurrentCycle()
+    {
+        IsBusy = false;
+        CurrentCycle = null;
+        Scheduler.Cleanup();
     }
 
     private static bool IsValidTransition(EventLifecycleState current, EventLifecycleState next)

@@ -12,13 +12,11 @@ public sealed class CrisisDetectionResult
     public CrisisDetectionResult(
         CrisisTag tag,
         bool isActive,
-        CrisisSeverity severity,
         string? reason,
         IDictionary<string, double>? metrics = null)
     {
         Tag = tag;
         IsActive = isActive;
-        Severity = isActive ? severity : CrisisSeverity.Inactive;
         Reason = reason?.Trim() ?? string.Empty;
         Metrics = new ReadOnlyDictionary<string, double>(
             metrics is null
@@ -29,8 +27,6 @@ public sealed class CrisisDetectionResult
     public CrisisTag Tag { get; }
 
     public bool IsActive { get; }
-
-    public CrisisSeverity Severity { get; }
 
     public string Reason { get; }
 

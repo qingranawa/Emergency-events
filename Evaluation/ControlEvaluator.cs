@@ -151,7 +151,7 @@ public static class ControlEvaluator
         List<MajorWaveSnapshot> completedWaves = new List<MajorWaveSnapshot>();
         foreach (MajorWaveSnapshot wave in snapshot.MajorWaveHistory)
         {
-            if (wave.IsEvaluationComplete && wave.StartingCount > 0)
+            if (wave.IsEvaluationComplete && wave.StartingCount > 0 && IsFoundationWave(wave))
             {
                 completedWaves.Add(wave);
             }
@@ -160,6 +160,13 @@ public static class ControlEvaluator
         completedWaves.Sort((left, right) =>
             GetWaveTime(right).CompareTo(GetWaveTime(left)));
         return completedWaves;
+    }
+
+    private static bool IsFoundationWave(MajorWaveSnapshot wave)
+    {
+        return string.Equals(wave.Faction, "NtfWave", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(wave.Faction, "NTF", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(wave.Faction, "MTF", StringComparison.OrdinalIgnoreCase);
     }
 
     private static WavePerformance ResolveWavePerformance(

@@ -25,7 +25,7 @@ public sealed class ConCrisisDetector : ICrisisDetector
         }
 
         MajorWaveSnapshot? secondWave = snapshot.MajorWaveHistory
-            .Where(wave => wave.StartingCount > 0)
+            .Where(wave => wave.StartingCount > 0 && IsFoundationWave(wave))
             .OrderBy(wave => wave.CompletedAt)
             .Skip(1)
             .FirstOrDefault();
@@ -66,20 +66,11 @@ public sealed class ConCrisisDetector : ICrisisDetector
                 wasContained);
         }
 
-        CrisisSeverity severity = state.ContainmentFailureStreak switch
-        {
-            <= 0 => CrisisSeverity.Inactive,
-            1 => CrisisSeverity.Level3,
-            2 => CrisisSeverity.Level4,
-            _ => CrisisSeverity.Level5,
-        };
+        bool isActive = state.ContainmentFailureStreak > 0;
         return new CrisisDetectionResult(
             CrisisTag.CON,
-            severity != CrisisSeverity.Inactive,
-            severity,
-            severity == CrisisSeverity.Inactive
-                ? "Containment checkpoint passed or pending"
-                : $"ContainmentFailureStreak={state.ContainmentFailureStreak}",
+            isActive,
+            isActive ? $"ContainmentFailureStreak={state.ContainmentFailureStreak}" : "Containment checkpoint passed or pending",
             new Dictionary<string, double>
             {
                 ["CurrentEquivalent"] = currentEquivalent,
@@ -95,11 +86,17 @@ public sealed class ConCrisisDetector : ICrisisDetector
         return new CrisisDetectionResult(
             CrisisTag.CON,
             false,
-            CrisisSeverity.Inactive,
             reason,
             new Dictionary<string, double>
             {
                 ["CurrentEquivalent"] = snapshot.MainScpAlive + snapshot.Scp0492Count / 3d,
             });
+    }
+
+    private static bool IsFoundationWave(MajorWaveSnapshot wave)
+    {
+        return string.Equals(wave.Faction, "NtfWave", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(wave.Faction, "NTF", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(wave.Faction, "MTF", StringComparison.OrdinalIgnoreCase);
     }
 }

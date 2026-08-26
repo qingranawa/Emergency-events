@@ -14,8 +14,8 @@ public static class TestEventDefinitions
     {
         List<EventDefinition> definitions = new List<EventDefinition>
         {
-            CreateProfessional("fake-bio-l3", EventResponseLevel.L3, CrisisSeverity.Level3),
-            CreateProfessional("fake-bio-l4", EventResponseLevel.L4, CrisisSeverity.Level4),
+            CreateProfessional("fake-bio-l3", EventResponseLevel.L3),
+            CreateProfessional("fake-bio-l4", EventResponseLevel.L4),
             CreateSource("fake-foundation-l2", EventSource.Foundation, EventResponseLevel.L2, EventCategory.Support, 20),
             CreateSource("fake-foundation-l3", EventSource.Foundation, EventResponseLevel.L3, EventCategory.Support, 10),
             CreateSource("fake-chaos-l3", EventSource.Chaos, EventResponseLevel.L3, EventCategory.Support, 10),
@@ -27,7 +27,7 @@ public static class TestEventDefinitions
         return new ReadOnlyCollection<EventDefinition>(definitions);
     }
 
-    private static EventDefinition CreateProfessional(string eventId, EventResponseLevel level, CrisisSeverity severity)
+    private static EventDefinition CreateProfessional(string eventId, EventResponseLevel level)
     {
         return new EventDefinition(
             eventId,
@@ -36,7 +36,6 @@ public static class TestEventDefinitions
             EventSource.ProfessionalCrisisResponse,
             level,
             new[] { CrisisTag.BIO },
-            severity,
             TierPersonnelPlan.Uniform(6),
             TierPersonnelPlan.Uniform(2),
             isEnabled: false,
@@ -59,7 +58,6 @@ public static class TestEventDefinitions
             source,
             level,
             Array.Empty<CrisisTag>(),
-            CrisisSeverity.Inactive,
             TierPersonnelPlan.Uniform(6),
             TierPersonnelPlan.Uniform(2),
             isEnabled: false,

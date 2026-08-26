@@ -47,7 +47,7 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
 
         DateTime initialAt = start.AddMinutes(151);
         RoundSnapshot initialSnapshot = CreateSnapshot(roundId, initialAt, scp079Present: true, scp079Tier: 3, warheadUnlocked: true, warheadActive: true);
-        CrisisAssessment initialAssessment = CreateAssessment(initialSnapshot, 1, (CrisisTag.SYS, CrisisSeverity.Level3), (CrisisTag.WAR, CrisisSeverity.Level4));
+        CrisisAssessment initialAssessment = CreateAssessment(initialSnapshot, 1, CrisisTag.SYS, CrisisTag.WAR);
         manager.HandleEvaluation(CreateEvaluation(initialSnapshot, initialAssessment, 1), initialAssessment);
         evidence.Add($"INITIAL_0631 Current={manager.State.CurrentFacilityDisorder:0.####};CurrentStockAdjustment=7;TransientDelta=0;LastProcessedAt={manager.State.LastProcessedAt:O}");
 
@@ -59,19 +59,19 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
             2d,
             "06:31:15 injected transient; not represented by current stock"));
         RoundSnapshot secondSnapshot = CreateSnapshot(roundId, secondAt, scp079Present: true, scp079Tier: 3, warheadUnlocked: true, warheadActive: true);
-        CrisisAssessment secondAssessment = CreateAssessment(secondSnapshot, 2, (CrisisTag.SYS, CrisisSeverity.Level3), (CrisisTag.WAR, CrisisSeverity.Level4));
+        CrisisAssessment secondAssessment = CreateAssessment(secondSnapshot, 2, CrisisTag.SYS, CrisisTag.WAR);
         manager.HandleEvaluation(CreateEvaluation(secondSnapshot, secondAssessment, 2), secondAssessment);
         double afterSys = manager.State.CurrentFacilityDisorder;
         evidence.Add($"INCREMENT_30S Current={afterSys:0.####};CurrentStockAdjustment=0;TransientDelta=2;LastProcessedAt={manager.State.LastProcessedAt:O}");
 
         DateTime thirdAt = initialAt.AddMinutes(1);
         RoundSnapshot thirdSnapshot = CreateSnapshot(roundId, thirdAt, scp079Present: true, scp079Tier: 4, warheadUnlocked: true, warheadActive: true);
-        CrisisAssessment thirdAssessment = CreateAssessment(thirdSnapshot, 3, (CrisisTag.SYS, CrisisSeverity.Level4), (CrisisTag.WAR, CrisisSeverity.Level4));
+        CrisisAssessment thirdAssessment = CreateAssessment(thirdSnapshot, 3, CrisisTag.SYS, CrisisTag.WAR);
         DlrcEvaluationCompletedEvent thirdEvaluation = CreateEvaluation(thirdSnapshot, thirdAssessment, 3);
         manager.HandleEvaluation(thirdEvaluation, thirdAssessment);
         double afterWar = manager.State.CurrentFacilityDisorder;
         manager.HandleEvaluation(thirdEvaluation, thirdAssessment);
-        evidence.Add($"SYS_079 Current={afterWar:0.####};079Delta=0;SYSDelta=4;WARDelta=0;UnderlyingWarheadDelta=0;DuplicateCurrent={manager.State.CurrentFacilityDisorder:0.####}");
+        evidence.Add($"SYS_079 Current={afterWar:0.####};079Delta=2;CrisisTransitionDelta=0;WARDelta=0;UnderlyingWarheadDelta=0;DuplicateCurrent={manager.State.CurrentFacilityDisorder:0.####}");
 
         DateTime endAt = thirdAt.AddSeconds(30);
         RoundSnapshot endSnapshot = CreateSnapshot(
@@ -83,12 +83,12 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
             warheadActive: false,
             warheadDetonated: true,
             warheadDetonatedAt: endAt.AddSeconds(-1));
-        CrisisAssessment endAssessment = CreateAssessment(endSnapshot, 5, (CrisisTag.END, CrisisSeverity.Level5));
+        CrisisAssessment endAssessment = CreateAssessment(endSnapshot, 5, CrisisTag.END);
         DlrcEvaluationCompletedEvent endEvaluation = CreateEvaluation(endSnapshot, endAssessment, 5);
         manager.HandleEvaluation(endEvaluation, endAssessment);
         double afterEnd = manager.State.CurrentFacilityDisorder;
         manager.HandleEvaluation(endEvaluation, endAssessment);
-        evidence.Add($"END Current={afterEnd:0.####};WARTransitionDelta=-4;ENDTransitionDelta=5;UnderlyingWarheadDelta=0;DuplicateCurrent={manager.State.CurrentFacilityDisorder:0.####}");
+        evidence.Add($"END Current={afterEnd:0.####};SYSResolvedDelta=-4;WARResolvedDelta=-4;ENDActivatedDelta=3;UnderlyingWarheadDelta=0;DuplicateCurrent={manager.State.CurrentFacilityDisorder:0.####}");
 
         DateTime invalidAt = initialAt.AddSeconds(150);
         manager.Service.Record(new DisorderEvent(
@@ -103,7 +103,7 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
         manager.HandleEvaluation(invalidEvaluation, null);
         evidence.Add($"INVALID_ASSESSMENT LastProcessedUnchanged={beforeInvalid == manager.State.LastProcessedAt};Current={manager.State.CurrentFacilityDisorder:0.####}");
 
-        CrisisAssessment recoveredAssessment = CreateAssessment(invalidSnapshot, 4, (CrisisTag.SYS, CrisisSeverity.Level4), (CrisisTag.WAR, CrisisSeverity.Level4));
+        CrisisAssessment recoveredAssessment = CreateAssessment(invalidSnapshot, 4, CrisisTag.SYS, CrisisTag.WAR);
         manager.HandleEvaluation(invalidEvaluation, recoveredAssessment);
         evidence.Add($"RECOVERY LastProcessedAt={manager.State.LastProcessedAt:O};Current={manager.State.CurrentFacilityDisorder:0.####}");
 
@@ -111,7 +111,7 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
         {
             DateTime timestamp = invalidAt.AddSeconds(index + 1);
             RoundSnapshot snapshot = CreateSnapshot(roundId, timestamp, scp079Present: true, scp079Tier: 4, warheadUnlocked: true, warheadActive: true);
-            CrisisAssessment assessment = CreateAssessment(snapshot, 1000 + index, (CrisisTag.SYS, CrisisSeverity.Level4), (CrisisTag.WAR, CrisisSeverity.Level4));
+            CrisisAssessment assessment = CreateAssessment(snapshot, 1000 + index, CrisisTag.SYS, CrisisTag.WAR);
             manager.HandleEvaluation(CreateEvaluation(snapshot, assessment, 1000 + index), assessment);
         }
 
@@ -155,47 +155,51 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
         manager.CleanupRound();
         manager.StartRound(start, 16, roundId + 1);
         InvokePrivate(manager, "RecordDeathFacts", start.AddMinutes(2), 1, RoleTypeId.NtfPrivate, RoleTypeId.Scp173);
-        DisorderEvent combatEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CombatDeath);
+        DisorderEvent? combatEvent = manager.Events.FirstOrDefault(eventFact => eventFact.Category == DisorderEventCategory.CombatDeath);
+        if (combatEvent is null)
+        {
+            throw new InvalidOperationException($"RecordDeathFacts must produce CombatDeath; Events={DescribeEvents(manager.Events)}");
+        }
         Require(!combatEvent.IsRepresentedByCurrentStock, "CombatDeath must remain a transient event");
         evidence.Add($"PRODUCER_COMBAT StockRepresented={combatEvent.IsRepresentedByCurrentStock};Delta={combatEvent.Delta:0.####}");
 
         manager.CleanupRound();
         manager.StartRound(start, 16, roundId + 2);
         RoundSnapshot previousSnapshot = CreateSnapshot(roundId + 2, start.AddMinutes(150), scp079Present: true, scp079Tier: 2);
-        CrisisAssessment previousAssessment = CreateAssessment(previousSnapshot, 1, (CrisisTag.SYS, CrisisSeverity.Level3));
+        CrisisAssessment previousAssessment = CreateAssessment(previousSnapshot, 1, CrisisTag.SYS);
         InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(previousSnapshot, previousAssessment, 1), previousAssessment);
         RoundSnapshot currentSnapshot = CreateSnapshot(roundId + 2, start.AddMinutes(151), scp079Present: true, scp079Tier: 3);
-        CrisisAssessment currentAssessment = CreateAssessment(currentSnapshot, 2, (CrisisTag.SYS, CrisisSeverity.Level4));
+        CrisisAssessment currentAssessment = CreateAssessment(currentSnapshot, 2, CrisisTag.SYS);
         InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(currentSnapshot, currentAssessment, 2), currentAssessment);
-        DisorderEvent tierEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.Scp079TierChanged);
-        DisorderEvent crisisEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
-        Require(tierEvent.Delta == 0d && crisisEvent.Delta == 4d, "079/SYS upgrade chain must have one non-zero Delta");
-        Require(tierEvent.IsRepresentedByCurrentStock && crisisEvent.IsRepresentedByCurrentStock, "079/SYS initialization facts must be stock-represented");
-        evidence.Add($"PRODUCER_079_SYS TierDelta={tierEvent.Delta:0.####};CrisisDelta={crisisEvent.Delta:0.####};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
+        DisorderEvent tierEvent = SingleEvent(manager.Events, DisorderEventCategory.Scp079TierChanged, "079 active-tier change");
+        int crisisEventCount = manager.Events.Count(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
+        Require(tierEvent.Delta == 2d && crisisEventCount == 0, "079 active-tier change must remain a single direct fact without a crisis transition");
+        Require(tierEvent.IsRepresentedByCurrentStock, "079 active-tier fact must be stock-represented");
+        evidence.Add($"PRODUCER_079_ACTIVE TierDelta={tierEvent.Delta:0.####};CrisisTransitionCount={crisisEventCount};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
 
         manager.CleanupRound();
         manager.StartRound(start, 16, roundId + 3);
         RoundSnapshot levelFourPreviousSnapshot = CreateSnapshot(roundId + 3, start.AddMinutes(150), scp079Present: true, scp079Tier: 3);
-        CrisisAssessment levelFourPreviousAssessment = CreateAssessment(levelFourPreviousSnapshot, 5, (CrisisTag.SYS, CrisisSeverity.Level3));
+        CrisisAssessment levelFourPreviousAssessment = CreateAssessment(levelFourPreviousSnapshot, 5, CrisisTag.SYS);
         InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(levelFourPreviousSnapshot, levelFourPreviousAssessment, 5), levelFourPreviousAssessment);
         RoundSnapshot levelFourCurrentSnapshot = CreateSnapshot(roundId + 3, start.AddMinutes(151), scp079Present: true, scp079Tier: 4);
-        CrisisAssessment levelFourCurrentAssessment = CreateAssessment(levelFourCurrentSnapshot, 6, (CrisisTag.SYS, CrisisSeverity.Level4));
+        CrisisAssessment levelFourCurrentAssessment = CreateAssessment(levelFourCurrentSnapshot, 6, CrisisTag.SYS);
         InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(levelFourCurrentSnapshot, levelFourCurrentAssessment, 6), levelFourCurrentAssessment);
-        DisorderEvent levelFourTierEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.Scp079TierChanged);
-        DisorderEvent levelFourCrisisEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
-        Require(levelFourTierEvent.Delta == 0d && levelFourCrisisEvent.Delta == 4d, "079 T3->T4/SYS L3->L4 chain must have one non-zero Delta");
-        evidence.Add($"PRODUCER_079_T3_T4 TierDelta={levelFourTierEvent.Delta:0.####};CrisisDelta={levelFourCrisisEvent.Delta:0.####};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
+        DisorderEvent levelFourTierEvent = SingleEvent(manager.Events, DisorderEventCategory.Scp079TierChanged, "079 active T3->T4");
+        int levelFourCrisisEventCount = manager.Events.Count(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
+        Require(levelFourTierEvent.Delta == 2d && levelFourCrisisEventCount == 0, "079 active T3->T4 must remain a single direct fact without a crisis transition");
+        evidence.Add($"PRODUCER_079_ACTIVE_T3_T4 TierDelta={levelFourTierEvent.Delta:0.####};CrisisTransitionCount={levelFourCrisisEventCount};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
 
         manager.CleanupRound();
         manager.StartRound(start, 16, roundId + 4);
         RoundSnapshot removalPreviousSnapshot = CreateSnapshot(roundId + 4, start.AddMinutes(150), scp079Present: true, scp079Tier: 3);
-        CrisisAssessment removalPreviousAssessment = CreateAssessment(removalPreviousSnapshot, 10, (CrisisTag.SYS, CrisisSeverity.Level3));
+        CrisisAssessment removalPreviousAssessment = CreateAssessment(removalPreviousSnapshot, 10, CrisisTag.SYS);
         InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(removalPreviousSnapshot, removalPreviousAssessment, 10), removalPreviousAssessment);
         RoundSnapshot removalCurrentSnapshot = CreateSnapshot(roundId + 4, start.AddMinutes(151), scp079Present: false, scp079Tier: 0);
         CrisisAssessment removalCurrentAssessment = CreateAssessment(removalCurrentSnapshot, 11);
         InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(removalCurrentSnapshot, removalCurrentAssessment, 11), removalCurrentAssessment);
-        DisorderEvent removed079Event = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.Scp079TierChanged);
-        DisorderEvent resolvedSysEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
+        DisorderEvent removed079Event = SingleEvent(manager.Events, DisorderEventCategory.Scp079TierChanged, "079 removal/SYS resolution");
+        DisorderEvent resolvedSysEvent = SingleEvent(manager.Events, DisorderEventCategory.CrisisTransition, "079 removal/SYS resolution");
         Require(removed079Event.Delta == 0d && resolvedSysEvent.Delta == -4d, "079 removal/SYS resolution chain must have one non-zero Delta");
         evidence.Add($"PRODUCER_079_REMOVE TierDelta={removed079Event.Delta:0.####};CrisisDelta={resolvedSysEvent.Delta:0.####};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
 
@@ -205,10 +209,10 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
         CrisisAssessment reappearPreviousAssessment = CreateAssessment(reappearPreviousSnapshot, 20);
         InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(reappearPreviousSnapshot, reappearPreviousAssessment, 20), reappearPreviousAssessment);
         RoundSnapshot reappearCurrentSnapshot = CreateSnapshot(roundId + 5, start.AddMinutes(151), scp079Present: true, scp079Tier: 3);
-        CrisisAssessment reappearCurrentAssessment = CreateAssessment(reappearCurrentSnapshot, 21, (CrisisTag.SYS, CrisisSeverity.Level3));
+        CrisisAssessment reappearCurrentAssessment = CreateAssessment(reappearCurrentSnapshot, 21, CrisisTag.SYS);
         InvokePrivate(manager, "RecordSnapshotFacts", CreateEvaluation(reappearCurrentSnapshot, reappearCurrentAssessment, 21), reappearCurrentAssessment);
-        DisorderEvent reappeared079Event = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.Scp079TierChanged);
-        DisorderEvent activatedSysEvent = manager.Events.Single(eventFact => eventFact.Category == DisorderEventCategory.CrisisTransition);
+        DisorderEvent reappeared079Event = SingleEvent(manager.Events, DisorderEventCategory.Scp079TierChanged, "079 reappearance/SYS activation");
+        DisorderEvent activatedSysEvent = SingleEvent(manager.Events, DisorderEventCategory.CrisisTransition, "079 reappearance/SYS activation");
         Require(reappeared079Event.Delta == 0d && activatedSysEvent.Delta == 3d, "079 reappearance/SYS activation chain must have one non-zero Delta");
         evidence.Add($"PRODUCER_079_REAPPEAR TierDelta={reappeared079Event.Delta:0.####};CrisisDelta={activatedSysEvent.Delta:0.####};NonZero={manager.Events.Count(eventFact => eventFact.Delta != 0d)}");
 
@@ -220,6 +224,25 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
         Require(zombieEvents == 1, "049-2 death path must create one ZombieForceChanged");
         evidence.Add($"PRODUCER_ZOMBIE ZombieForceChanged={zombieEvents}");
         manager.CleanupRound();
+    }
+
+    private static string DescribeEvents(IEnumerable<DisorderEvent> events)
+    {
+        return string.Join(",", events.Select(eventFact => $"{eventFact.Category}:{eventFact.EventId}"));
+    }
+
+    private static DisorderEvent SingleEvent(
+        IEnumerable<DisorderEvent> events,
+        DisorderEventCategory category,
+        string scenario)
+    {
+        DisorderEvent[] matches = events.Where(eventFact => eventFact.Category == category).ToArray();
+        if (matches.Length != 1)
+        {
+            throw new InvalidOperationException($"{scenario} expected exactly one {category}; Count={matches.Length}; Events={DescribeEvents(events)}");
+        }
+
+        return matches[0];
     }
 
     private static void InvokePrivate(object target, string methodName, params object[] arguments)
@@ -252,7 +275,7 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
     private static CrisisAssessment CreateAssessment(
         RoundSnapshot snapshot,
         long evaluationId,
-        params (CrisisTag Tag, CrisisSeverity Severity)[] activeTags)
+        params CrisisTag[] activeTags)
     {
         DlrcEvaluationResult result = EmergencyEvents.Evaluation.DlrcEvaluator.Evaluate(
             snapshot,
@@ -260,9 +283,9 @@ public sealed class FdiRuntimeHarnessCommand : ICommand
             new EvaluationOptions(),
             0d);
         List<CrisisDetectionResult> detections = new List<CrisisDetectionResult>();
-        foreach ((CrisisTag tag, CrisisSeverity severity) in activeTags)
+        foreach (CrisisTag tag in activeTags)
         {
-            detections.Add(new CrisisDetectionResult(tag, true, severity, "RuntimeHarness"));
+            detections.Add(new CrisisDetectionResult(tag, true, "RuntimeHarness"));
         }
 
         return new CrisisAssessment(evaluationId, DlrcEvaluationTrigger.PERIODIC, snapshot, result, detections);

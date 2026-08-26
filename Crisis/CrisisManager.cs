@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using EmergencyEvents.Crisis.Detectors;
 using EmergencyEvents.Evaluation;
 
@@ -10,9 +11,14 @@ namespace EmergencyEvents.Crisis;
 /// </summary>
 public sealed class CrisisManager
 {
+    private const int ProcessedEvaluationCapacity = 512;
     private readonly CrisisState state = new CrisisState();
     private readonly IReadOnlyList<ICrisisDetector> detectors;
     private readonly HashSet<long> processedEvaluationIds = new HashSet<long>();
+    private readonly Queue<long> processedEvaluationOrder = new Queue<long>();
+    private readonly Dictionary<CrisisTag, long> activeEpisodeIds = new Dictionary<CrisisTag, long>();
+    private long nextEpisodeId;
+    private long highestProcessedEvaluationId;
 
     public CrisisManager(CrisisOptions? options = null)
     {
@@ -50,9 +56,17 @@ public sealed class CrisisManager
             return CurrentCrisisAssessment;
         }
 
-        if (!processedEvaluationIds.Add(completedEvent.EvaluationId))
+        if (completedEvent.EvaluationId <= highestProcessedEvaluationId
+            || !processedEvaluationIds.Add(completedEvent.EvaluationId))
         {
             return CurrentCrisisAssessment;
+        }
+
+        processedEvaluationOrder.Enqueue(completedEvent.EvaluationId);
+        highestProcessedEvaluationId = Math.Max(highestProcessedEvaluationId, completedEvent.EvaluationId);
+        while (processedEvaluationOrder.Count > ProcessedEvaluationCapacity)
+        {
+            processedEvaluationIds.Remove(processedEvaluationOrder.Dequeue());
         }
 
         CrisisAssessment? previous = CurrentCrisisAssessment;
@@ -70,12 +84,35 @@ public sealed class CrisisManager
                 context));
         }
 
+        Dictionary<CrisisTag, long> episodeIds = new Dictionary<CrisisTag, long>();
+        foreach (CrisisDetectionResult detection in detections)
+        {
+            if (!detection.IsActive)
+            {
+                continue;
+            }
+
+            if (!activeEpisodeIds.TryGetValue(detection.Tag, out long episodeId))
+            {
+                episodeId = ++nextEpisodeId;
+                activeEpisodeIds[detection.Tag] = episodeId;
+            }
+
+            episodeIds[detection.Tag] = episodeId;
+        }
+
         CrisisAssessment current = new CrisisAssessment(
             completedEvent.EvaluationId,
             completedEvent.Trigger,
             completedEvent.Snapshot,
             completedEvent.Result,
-            detections);
+            detections,
+            episodeIds,
+            previous);
+        foreach (CrisisTag resolvedTag in current.ResolvedTags)
+        {
+            activeEpisodeIds.Remove(resolvedTag);
+        }
         PreviousCrisisAssessment = previous;
         CurrentCrisisAssessment = current;
         CrisisAssessmentUpdated?.Invoke(current);
@@ -200,6 +237,10 @@ public sealed class CrisisManager
     {
         state.Reset();
         processedEvaluationIds.Clear();
+        processedEvaluationOrder.Clear();
+        activeEpisodeIds.Clear();
+        nextEpisodeId = 0L;
+        highestProcessedEvaluationId = 0L;
         PreviousCrisisAssessment = null;
         CurrentCrisisAssessment = null;
     }
@@ -211,15 +252,7 @@ public sealed class CrisisManager
             return true;
         }
 
-        foreach (CrisisTag tag in Enum.GetValues(typeof(CrisisTag)))
-        {
-            if (previous.GetSeverity(tag) != current.GetSeverity(tag))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return !previous.ActiveTags.SequenceEqual(current.ActiveTags);
     }
 
     private ICrisisDetector? FindDetector(CrisisTag tag)

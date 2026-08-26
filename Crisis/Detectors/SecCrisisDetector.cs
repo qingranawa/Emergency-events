@@ -22,13 +22,10 @@ public sealed class SecCrisisDetector : ICrisisDetector
             || snapshot.ChaosCombatants > 0
             || snapshot.HostileThirdPartyCombatants > 0;
         int foundationCombatants = snapshot.FoundationCombatants;
-        CrisisSeverity severity = hostileThreatPresent
-            ? ResolveSeverity(foundationCombatants, thresholds)
-            : CrisisSeverity.Inactive;
+        bool isActive = hostileThreatPresent && foundationCombatants <= thresholds.ActivationThreshold;
         return new CrisisDetectionResult(
             CrisisTag.SEC,
-            severity != CrisisSeverity.Inactive,
-            severity,
+            isActive,
             hostileThreatPresent
                 ? $"FoundationCombatants={foundationCombatants}; HostileThreatPresent=true"
                 : "HostileThreatPresent=false",
@@ -36,32 +33,8 @@ public sealed class SecCrisisDetector : ICrisisDetector
             {
                 ["FoundationCombatants"] = foundationCombatants,
                 ["HostileThreatPresent"] = hostileThreatPresent ? 1d : 0d,
-                ["L3Threshold"] = thresholds.Level3,
-                ["L4Threshold"] = thresholds.Level4,
-                ["L5Threshold"] = thresholds.Level5,
+                ["ActivationThreshold"] = thresholds.ActivationThreshold,
             });
     }
 
-    private static CrisisSeverity ResolveSeverity(int foundationCombatants, CrisisTierThresholds thresholds)
-    {
-        if (foundationCombatants <= thresholds.Level5)
-        {
-            return CrisisSeverity.Level5;
-        }
-
-        if (thresholds.Level4 == thresholds.Level3
-            && foundationCombatants == thresholds.Level3)
-        {
-            return CrisisSeverity.Level3;
-        }
-
-        if (foundationCombatants <= thresholds.Level4)
-        {
-            return CrisisSeverity.Level4;
-        }
-
-        return foundationCombatants <= thresholds.Level3
-            ? CrisisSeverity.Level3
-            : CrisisSeverity.Inactive;
-    }
 }

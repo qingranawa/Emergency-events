@@ -68,7 +68,8 @@ public sealed class MajorWaveSnapshot
         DateTime? evaluatedAt = null,
         IEnumerable<int>? memberIds = null,
         DateTime? completedAt = null,
-        double? scpCombatEquivalentAtCompletion = null)
+        double? scpCombatEquivalentAtCompletion = null,
+        string? faction = null)
     {
         Name = EvaluationValueNormalizer.NormalizeName(name);
         StartingCount = EvaluationValueNormalizer.NormalizeNonNegativeInt(startingCount);
@@ -83,9 +84,12 @@ public sealed class MajorWaveSnapshot
         ScpCombatEquivalentAtCompletion = scpCombatEquivalentAtCompletion.HasValue
             ? EvaluationValueNormalizer.NormalizeNonNegativeDouble(scpCombatEquivalentAtCompletion.Value)
             : null;
+        Faction = EvaluationValueNormalizer.NormalizeName(faction);
     }
 
     public string Name { get; }
+
+    public string Faction { get; }
 
     public int StartingCount { get; }
 

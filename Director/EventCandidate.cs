@@ -43,8 +43,6 @@ public sealed class EventCandidate
 
     public EventResponseLevel RequiredResponseLevel => Definition.RequiredResponseLevel;
 
-    public CrisisSeverity RequiredCrisisSeverity => Definition.RequiredCrisisSeverity;
-
     public int AvailablePersonnel { get; }
 
     public int RequestedPersonnel { get; }

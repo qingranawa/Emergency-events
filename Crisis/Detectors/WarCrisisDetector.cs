@@ -24,16 +24,12 @@ public sealed class WarCrisisDetector : ICrisisDetector
             return CreateInactive("WarheadUnlocked=false", snapshot);
         }
 
-        CrisisSeverity severity = snapshot.WarheadActive
-            ? CrisisSeverity.Level4
-            : CrisisSeverity.Level3;
         string reason = snapshot.WarheadActive
             ? "WarheadUnlocked=true; CountdownActive=true"
             : "WarheadUnlocked=true; CountdownActive=false";
         return new CrisisDetectionResult(
             CrisisTag.WAR,
             true,
-            severity,
             reason,
             CreateMetrics(snapshot));
     }
@@ -43,7 +39,6 @@ public sealed class WarCrisisDetector : ICrisisDetector
         return new CrisisDetectionResult(
             CrisisTag.WAR,
             false,
-            CrisisSeverity.Inactive,
             reason,
             CreateMetrics(snapshot));
     }

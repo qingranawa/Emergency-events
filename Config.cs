@@ -106,35 +106,35 @@ public sealed class Config : IConfig
     [Description("Module 05 Event Director 配置。Phase 1 默认关闭生产事件，只保留框架与测试入口。")]
     public EventDirectorConfig EventDirector { get; set; } = new EventDirectorConfig();
 
-    [Description("BIO 危机 E 档 L3/L4/L5 的 049-2 数量阈值。")]
-    public CrisisTierThresholds CrisisBioThresholdsE { get; set; } = new CrisisTierThresholds(3, 5, 7);
+    [Description("BIO 危机 E 档的 049-2 激活阈值。")]
+    public CrisisTierThresholds CrisisBioThresholdsE { get; set; } = new CrisisTierThresholds(3);
 
-    [Description("BIO 危机 D 档 L3/L4/L5 的 049-2 数量阈值。")]
-    public CrisisTierThresholds CrisisBioThresholdsD { get; set; } = new CrisisTierThresholds(3, 6, 8);
+    [Description("BIO 危机 D 档的 049-2 激活阈值。")]
+    public CrisisTierThresholds CrisisBioThresholdsD { get; set; } = new CrisisTierThresholds(3);
 
-    [Description("BIO 危机 C 档 L3/L4/L5 的 049-2 数量阈值。")]
-    public CrisisTierThresholds CrisisBioThresholdsC { get; set; } = new CrisisTierThresholds(4, 7, 10);
+    [Description("BIO 危机 C 档的 049-2 激活阈值。")]
+    public CrisisTierThresholds CrisisBioThresholdsC { get; set; } = new CrisisTierThresholds(4);
 
-    [Description("BIO 危机 B 档 L3/L4/L5 的 049-2 数量阈值。")]
-    public CrisisTierThresholds CrisisBioThresholdsB { get; set; } = new CrisisTierThresholds(4, 8, 12);
+    [Description("BIO 危机 B 档的 049-2 激活阈值。")]
+    public CrisisTierThresholds CrisisBioThresholdsB { get; set; } = new CrisisTierThresholds(4);
 
-    [Description("BIO 危机 A 档 L3/L4/L5 的 049-2 数量阈值。")]
-    public CrisisTierThresholds CrisisBioThresholdsA { get; set; } = new CrisisTierThresholds(5, 9, 14);
+    [Description("BIO 危机 A 档的 049-2 激活阈值。")]
+    public CrisisTierThresholds CrisisBioThresholdsA { get; set; } = new CrisisTierThresholds(5);
 
-    [Description("SEC 危机 E 档 Foundation L3/L4/L5 的人数阈值。")]
-    public CrisisTierThresholds CrisisSecurityThresholdsE { get; set; } = new CrisisTierThresholds(1, 1, 0);
+    [Description("SEC 危机 E 档的 Foundation 激活阈值。")]
+    public CrisisTierThresholds CrisisSecurityThresholdsE { get; set; } = new CrisisTierThresholds(1);
 
-    [Description("SEC 危机 D 档 Foundation L3/L4/L5 的人数阈值。")]
-    public CrisisTierThresholds CrisisSecurityThresholdsD { get; set; } = new CrisisTierThresholds(2, 1, 0);
+    [Description("SEC 危机 D 档的 Foundation 激活阈值。")]
+    public CrisisTierThresholds CrisisSecurityThresholdsD { get; set; } = new CrisisTierThresholds(2);
 
-    [Description("SEC 危机 C 档 Foundation L3/L4/L5 的人数阈值。")]
-    public CrisisTierThresholds CrisisSecurityThresholdsC { get; set; } = new CrisisTierThresholds(2, 1, 0);
+    [Description("SEC 危机 C 档的 Foundation 激活阈值。")]
+    public CrisisTierThresholds CrisisSecurityThresholdsC { get; set; } = new CrisisTierThresholds(2);
 
-    [Description("SEC 危机 B 档 Foundation L3/L4/L5 的人数阈值。")]
-    public CrisisTierThresholds CrisisSecurityThresholdsB { get; set; } = new CrisisTierThresholds(4, 2, 0);
+    [Description("SEC 危机 B 档的 Foundation 激活阈值。")]
+    public CrisisTierThresholds CrisisSecurityThresholdsB { get; set; } = new CrisisTierThresholds(4);
 
-    [Description("SEC 危机 A 档 Foundation L3/L4/L5 的人数阈值。")]
-    public CrisisTierThresholds CrisisSecurityThresholdsA { get; set; } = new CrisisTierThresholds(5, 2, 0);
+    [Description("SEC 危机 A 档的 Foundation 激活阈值。")]
+    public CrisisTierThresholds CrisisSecurityThresholdsA { get; set; } = new CrisisTierThresholds(5);
 
     [Description("CON 收容检查间隔，单位为秒。非法值回退为 300。")]
     public int CrisisContainmentCheckpointSeconds { get; set; } = 300;
@@ -142,14 +142,8 @@ public sealed class Config : IConfig
     [Description("CON 每个检查点判定成功所需的最低 SCP Combat Equivalent 下降值。非法值回退为 1.0。")]
     public double CrisisContainmentEquivalentReduction { get; set; } = 1d;
 
-    [Description("END 连续地表敌对僵持达到 L3 所需秒数。")]
-    public int CrisisEndLevel3Seconds { get; set; } = 300;
-
-    [Description("END 连续地表敌对僵持达到 L4 所需秒数。")]
-    public int CrisisEndLevel4Seconds { get; set; } = 480;
-
-    [Description("END 连续地表敌对僵持达到 L5 所需秒数。")]
-    public int CrisisEndLevel5Seconds { get; set; } = 720;
+    [Description("END 连续地表敌对僵持达到激活条件所需秒数。")]
+    public int CrisisEndActivationSeconds { get; set; } = 300;
 
     [Description("D-LRC E 档响应等级阈值，从 L0 到 L5。")]
     public List<double> DlrcResponseThresholdsE { get; set; } = new List<double>

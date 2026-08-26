@@ -65,13 +65,7 @@ public sealed class FacilityDisorderConfig
 
     public double Scp079Removed { get; set; } = -3d;
 
-    public double CrisisActivatedL3 { get; set; } = 3d;
-
-    public double CrisisEscalatedToL4 { get; set; } = 4d;
-
-    public double CrisisEscalatedToL5 { get; set; } = 5d;
-
-    public double CrisisDowngraded { get; set; } = -3d;
+    public double CrisisActivated { get; set; } = 3d;
 
     public double CrisisResolved { get; set; } = -4d;
 
@@ -95,7 +89,7 @@ public sealed class FacilityDisorderConfig
 
     public double CurrentScp079Tier { get; set; } = 2d;
 
-    public double CurrentCrisisPerLevel { get; set; } = 1d;
+    public double CurrentCrisisPerActive { get; set; } = 1d;
 
     public double CurrentWarheadUnlocked { get; set; } = 2d;
 
@@ -137,7 +131,7 @@ public sealed class FacilityDisorderConfig
         CurrentZombiePerUnit = Normalize(CurrentZombiePerUnit, 1d);
         CurrentHostilePerCombatant = Normalize(CurrentHostilePerCombatant, 1d);
         CurrentScp079Tier = Normalize(CurrentScp079Tier, 2d);
-        CurrentCrisisPerLevel = Normalize(CurrentCrisisPerLevel, 1d);
+        CurrentCrisisPerActive = Normalize(CurrentCrisisPerActive, 1d);
         CurrentWarheadUnlocked = Normalize(CurrentWarheadUnlocked, 2d);
         CurrentWarheadCountdownActive = Normalize(CurrentWarheadCountdownActive, 3d);
         CurrentWarheadDetonated = Normalize(CurrentWarheadDetonated, 0d);

@@ -185,7 +185,7 @@ public static class DlrcStageReportFormatter
 
         foreach (CrisisDetectionResult detection in activeDetections)
         {
-            builder.AppendLine($"{FormatCrisisTag(detection.Tag)}：{(int)detection.Severity}级");
+            builder.AppendLine($"{FormatCrisisTag(detection.Tag)}：{(detection.IsActive ? "激活" : "未激活")}");
         }
     }
 

@@ -45,20 +45,11 @@ public sealed class EndCrisisDetector : ICrisisDetector
         DateTime surfaceStalemateStartedAt = state.SurfaceStalemateStartedAt
             ?? throw new InvalidOperationException("Surface stalemate state was not initialized.");
         double durationSeconds = (snapshot.Timestamp - surfaceStalemateStartedAt).TotalSeconds;
-        CrisisSeverity severity = durationSeconds >= options.EndLevel5Seconds
-            ? CrisisSeverity.Level5
-            : durationSeconds >= options.EndLevel4Seconds
-                ? CrisisSeverity.Level4
-                : durationSeconds >= options.EndLevel3Seconds
-                    ? CrisisSeverity.Level3
-                    : CrisisSeverity.Inactive;
+        bool isActive = durationSeconds >= options.EndActivationSeconds;
         return new CrisisDetectionResult(
             CrisisTag.END,
-            severity != CrisisSeverity.Inactive,
-            severity,
-            severity == CrisisSeverity.Inactive
-                ? "SurfaceHostileStalemate duration below L3Threshold"
-                : $"SurfaceHostileStalemateSeconds={durationSeconds:0.###}",
+            isActive,
+            isActive ? $"SurfaceHostileStalemateSeconds={durationSeconds:0.###}" : "SurfaceHostileStalemate duration below ActivationThreshold",
             CreateMetrics(snapshot, durationSeconds));
     }
 
@@ -78,7 +69,6 @@ public sealed class EndCrisisDetector : ICrisisDetector
         return new CrisisDetectionResult(
             CrisisTag.END,
             false,
-            CrisisSeverity.Inactive,
             reason,
             CreateMetrics(snapshot, durationSeconds));
     }

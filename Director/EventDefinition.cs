@@ -21,7 +21,6 @@ public sealed class EventDefinition
         EventSource source,
         EventResponseLevel requiredResponseLevel,
         IEnumerable<CrisisTag>? requiredCrisisTags,
-        CrisisSeverity requiredCrisisSeverity,
         TierPersonnelPlan targetPersonnel,
         TierPersonnelPlan minimumPersonnel,
         bool isEnabled,
@@ -46,15 +45,13 @@ public sealed class EventDefinition
         RequiredResponseLevel = requiredResponseLevel;
         RequiredCrisisTags = new ReadOnlyCollection<CrisisTag>(
             (requiredCrisisTags ?? Array.Empty<CrisisTag>()).Distinct().ToArray());
-        RequiredCrisisSeverity = RequiredCrisisTags.Count == 0
-            ? CrisisSeverity.Inactive
-            : requiredCrisisSeverity;
         TargetPersonnel = targetPersonnel ?? throw new ArgumentNullException(nameof(targetPersonnel));
         MinimumPersonnel = minimumPersonnel ?? throw new ArgumentNullException(nameof(minimumPersonnel));
         IsEnabled = isEnabled;
         Priority = priority;
         Weight = !double.IsNaN(weight) && !double.IsInfinity(weight) && weight > 0d ? weight : 0d;
         RequiresUndergroundFacility = requiresUndergroundFacility;
+        Dictionary<PopulationTier, EventPopulationProfile> profiles = new Dictionary<PopulationTier, EventPopulationProfile>();
 
         foreach (PopulationTier tier in Enum.GetValues(typeof(PopulationTier)))
         {
@@ -62,7 +59,11 @@ public sealed class EventDefinition
             {
                 throw new ArgumentException("MinimumPersonnel 不得高于 TargetPersonnel。", nameof(minimumPersonnel));
             }
+
+            profiles[tier] = new EventPopulationProfile(GetTargetPersonnel(tier), GetMinimumPersonnel(tier));
         }
+
+        PopulationProfiles = new ReadOnlyDictionary<PopulationTier, EventPopulationProfile>(profiles);
     }
 
     public string EventId { get; }
@@ -77,8 +78,6 @@ public sealed class EventDefinition
 
     public IReadOnlyList<CrisisTag> RequiredCrisisTags { get; }
 
-    public CrisisSeverity RequiredCrisisSeverity { get; }
-
     public TierPersonnelPlan TargetPersonnel { get; }
 
     public TierPersonnelPlan MinimumPersonnel { get; }
@@ -91,6 +90,8 @@ public sealed class EventDefinition
 
     public bool RequiresUndergroundFacility { get; }
 
+    public IReadOnlyDictionary<PopulationTier, EventPopulationProfile> PopulationProfiles { get; }
+
     public bool IsProfessionalResponse => Source == EventSource.ProfessionalCrisisResponse;
 
     public int GetTargetPersonnel(PopulationTier tier)
@@ -101,5 +102,10 @@ public sealed class EventDefinition
     public int GetMinimumPersonnel(PopulationTier tier)
     {
         return MinimumPersonnel.Get(tier);
+    }
+
+    public EventPopulationProfile GetPopulationProfile(PopulationTier tier)
+    {
+        return PopulationProfiles[tier];
     }
 }

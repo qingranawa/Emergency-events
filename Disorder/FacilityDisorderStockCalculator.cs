@@ -24,7 +24,7 @@ public static class FacilityDisorderStockCalculator
             + stock.ChaosCount * config.CurrentChaosPerCombatant
             + stock.ZombieCount * config.CurrentZombiePerUnit
             + stock.CurrentHostileForce * config.CurrentHostilePerCombatant;
-        bool sysExpresses079 = stock.CrisisAssessment?.GetSeverity(CrisisTag.SYS) > CrisisSeverity.Inactive;
+        bool sysExpresses079 = stock.CrisisAssessment?.IsActive(CrisisTag.SYS) == true;
         if (stock.Scp079Present && !sysExpresses079)
         {
             adjustment += stock.Scp079Tier * config.CurrentScp079Tier;
@@ -34,7 +34,7 @@ public static class FacilityDisorderStockCalculator
         {
             foreach (CrisisTag tag in Enum.GetValues(typeof(CrisisTag)))
             {
-                adjustment += (int)stock.CrisisAssessment.GetSeverity(tag) * config.CurrentCrisisPerLevel;
+                adjustment += stock.CrisisAssessment.IsActive(tag) ? config.CurrentCrisisPerActive : 0d;
             }
         }
 

@@ -8,6 +8,13 @@ namespace EmergencyEvents.Director;
 /// </summary>
 public sealed class EventEligibilityService
 {
+    private readonly IEventPopulationResolver populationResolver;
+
+    public EventEligibilityService(IEventPopulationResolver? populationResolver = null)
+    {
+        this.populationResolver = populationResolver ?? new EventPopulationResolver();
+    }
+
     public EventCandidate Evaluate(
         DirectorContext context,
         EventDefinition definition,
@@ -18,9 +25,10 @@ public sealed class EventEligibilityService
             throw new ArgumentNullException(nameof(context));
         }
 
-        int requested = definition.GetTargetPersonnel(context.PopulationTier);
-        int minimum = definition.GetMinimumPersonnel(context.PopulationTier);
         int available = GetAvailablePersonnel(context, definition.Source);
+        ResolvedEventPopulation population = populationResolver.Resolve(definition, context.PopulationTier, available);
+        int requested = population.Target;
+        int minimum = population.Minimum;
 
         if (!definition.IsEnabled)
         {
@@ -62,7 +70,7 @@ public sealed class EventEligibilityService
         {
             foreach (CrisisTag tag in definition.RequiredCrisisTags)
             {
-                if (!tracker.CanConsume(tag, definition.RequiredCrisisSeverity))
+                if (!tracker.CanConsume(tag, definition.RequiredResponseLevel))
                 {
                     return Reject(definition, CandidateRejectReason.ProfessionalResponseAlreadyConsumed, "ProfessionalResponseAlreadyConsumed", available, requested, minimum);
                 }
@@ -74,13 +82,15 @@ public sealed class EventEligibilityService
             return Reject(definition, CandidateRejectReason.FacilityDestroyed, "FacilityDestroyed", available, requested, minimum);
         }
 
-        if (available < minimum)
+        if (!population.IsViable)
         {
-            return Reject(definition, CandidateRejectReason.PersonnelBelowMinimum, "PersonnelBelowMinimum", available, requested, minimum);
+            CandidateRejectReason reason = population.RejectReason == "TargetPersonnelUnavailable"
+                ? CandidateRejectReason.TargetPersonnelUnavailable
+                : CandidateRejectReason.PersonnelBelowMinimum;
+            return Reject(definition, reason, population.RejectReason, available, requested, minimum);
         }
 
-        int planned = Math.Min(requested, available);
-        return new EventCandidate(definition, true, "Eligible", available, requested, minimum, planned);
+        return new EventCandidate(definition, true, "Eligible", available, requested, minimum, population.Planned);
     }
 
     private static CandidateRejectReason CheckCrisisRequirements(DirectorContext context, EventDefinition definition)
@@ -102,10 +112,6 @@ public sealed class EventEligibilityService
                 return CandidateRejectReason.CrisisRequirementMissing;
             }
 
-            if (context.CrisisAssessment.GetSeverity(tag) < definition.RequiredCrisisSeverity)
-            {
-                return CandidateRejectReason.CrisisSeverityTooLow;
-            }
         }
 
         return CandidateRejectReason.None;

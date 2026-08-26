@@ -107,7 +107,8 @@ public sealed class MajorWaveRecord
             evaluatedAt: SurvivalObservedAt,
             memberIds: MemberIds,
             completedAt: CompletedAt,
-            scpCombatEquivalentAtCompletion: ScpCombatEquivalentAtCompletion);
+            scpCombatEquivalentAtCompletion: ScpCombatEquivalentAtCompletion,
+            faction: Faction);
     }
 }
 
@@ -145,6 +146,13 @@ public sealed class MajorWaveCompletedEvent
 public sealed class MajorWaveHistory
 {
     private readonly List<MajorWaveRecord> records = new List<MajorWaveRecord>();
+
+    public MajorWaveHistory(int capacity = 256)
+    {
+        Capacity = Math.Max(2, capacity);
+    }
+
+    public int Capacity { get; }
 
     public int Count => records.Count;
 
@@ -187,6 +195,10 @@ public sealed class MajorWaveHistory
         LastMajorWave = record;
         CurrentWave = record;
         records.Add(record);
+        if (records.Count > Capacity)
+        {
+            records.RemoveRange(0, records.Count - Capacity);
+        }
         return record;
     }
 

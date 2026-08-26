@@ -16,11 +16,14 @@ namespace EmergencyEvents.Disorder;
 /// </summary>
 public sealed class FacilityDisorderRuntimeManager
 {
+    private const int EvaluationIdCapacity = 512;
     private const float ReconcileDelaySeconds = 0.2f;
 
     private readonly FacilityDisorderConfig config;
     private readonly FacilityDisorderService service;
     private readonly HashSet<long> evaluationIds = new HashSet<long>();
+    private readonly Queue<long> evaluationIdOrder = new Queue<long>();
+    private long highestEvaluationId;
     private ForceSnapshot? previousForces;
     private CrisisAssessment? previousAssessment;
     private bool hasObserved079;
@@ -150,9 +153,17 @@ public sealed class FacilityDisorderRuntimeManager
             return;
         }
 
-        if (!evaluationIds.Add(completedEvent.EvaluationId))
+        if (completedEvent.EvaluationId <= highestEvaluationId
+            || !evaluationIds.Add(completedEvent.EvaluationId))
         {
             return;
+        }
+
+        evaluationIdOrder.Enqueue(completedEvent.EvaluationId);
+        highestEvaluationId = Math.Max(highestEvaluationId, completedEvent.EvaluationId);
+        while (evaluationIdOrder.Count > EvaluationIdCapacity)
+        {
+            evaluationIds.Remove(evaluationIdOrder.Dequeue());
         }
 
         RecordSnapshotFacts(completedEvent, assessment);
@@ -240,7 +251,7 @@ public sealed class FacilityDisorderRuntimeManager
     {
         RoundSnapshot snapshot = completedEvent.Snapshot;
         bool sysChanged = previousAssessment is not null
-            && previousAssessment.GetSeverity(CrisisTag.SYS) != assessment?.GetSeverity(CrisisTag.SYS);
+            && previousAssessment.IsActive(CrisisTag.SYS) != (assessment?.IsActive(CrisisTag.SYS) == true);
         if (!hasObserved079)
         {
             hasObserved079 = true;
@@ -335,8 +346,8 @@ public sealed class FacilityDisorderRuntimeManager
 
         foreach (CrisisTag tag in Enum.GetValues(typeof(CrisisTag)))
         {
-            CrisisSeverity previous = previousAssessment.GetSeverity(tag);
-            CrisisSeverity current = assessment.GetSeverity(tag);
+            bool previous = previousAssessment.IsActive(tag);
+            bool current = assessment.IsActive(tag);
             if (previous == current)
             {
                 continue;
@@ -353,29 +364,14 @@ public sealed class FacilityDisorderRuntimeManager
         }
     }
 
-    private double ResolveCrisisDelta(CrisisSeverity previous, CrisisSeverity current)
+    private double ResolveCrisisDelta(bool previous, bool current)
     {
-        if (current == CrisisSeverity.Inactive)
+        if (!current)
         {
             return config.CrisisResolved;
         }
 
-        if (current >= CrisisSeverity.Level5 && previous < CrisisSeverity.Level5)
-        {
-            return config.CrisisEscalatedToL5;
-        }
-
-        if (current >= CrisisSeverity.Level4 && previous < CrisisSeverity.Level4)
-        {
-            return config.CrisisEscalatedToL4;
-        }
-
-        if (current >= CrisisSeverity.Level3 && previous < CrisisSeverity.Level3)
-        {
-            return config.CrisisActivatedL3;
-        }
-
-        return config.CrisisDowngraded;
+        return config.CrisisActivated;
     }
 
     private void ReconcileForceSnapshot(bool recordChanges)
@@ -432,6 +428,8 @@ public sealed class FacilityDisorderRuntimeManager
     private void ResetTransientFacts()
     {
         evaluationIds.Clear();
+        evaluationIdOrder.Clear();
+        highestEvaluationId = 0L;
         previousForces = null;
         previousAssessment = null;
         hasObserved079 = false;

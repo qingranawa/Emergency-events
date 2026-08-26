@@ -163,7 +163,7 @@ public sealed partial class Plugin
     {
         PrimaryWaveCaps caps = Config.PrimaryWaveCaps ?? new PrimaryWaveCaps();
         FacilityDisorderConfig disorder = Config.FacilityDisorder;
-        response = $"【EmergencyEvents 配置】\nMinimumPlayers={Config.MinimumPlayers}\nWaveCaps：E{caps.E} D{caps.D} C{caps.C} B{caps.B} A{caps.A}\nTimer Extension：刷新方 +{Config.SpawningFactionTimerExtensionSeconds} 秒；另一方 +{Config.OpposingFactionTimerExtensionSeconds} 秒\nD-LRC：开始时间 {FormatSeconds(Config.DlrcEvaluatorStartTimeSeconds)}；周期 {Config.DlrcEvaluatorIntervalSeconds} 秒\n危机：CON 检查 {Config.CrisisContainmentCheckpointSeconds} 秒；END L3/L4/L5={Config.CrisisEndLevel3Seconds}/{Config.CrisisEndLevel4Seconds}/{Config.CrisisEndLevel5Seconds} 秒\nFDI：Enabled={disorder.Enabled}; InitialBase={disorder.InitialBase:0.##}; Lookback={disorder.InitialLookbackSeconds}s; SettlementHistoryCapacity={disorder.SettlementHistoryCapacity}; EventHistoryCapacity={disorder.EventHistoryCapacity}; Bands={disorder.LowMaximum:0.##}/{disorder.MediumMaximum:0.##}/{disorder.HighMinimum:0.##}\n此命令只读，不支持 RA 修改配置。";
+        response = $"【EmergencyEvents 配置】\nMinimumPlayers={Config.MinimumPlayers}\nWaveCaps：E{caps.E} D{caps.D} C{caps.C} B{caps.B} A{caps.A}\nTimer Extension：刷新方 +{Config.SpawningFactionTimerExtensionSeconds} 秒；另一方 +{Config.OpposingFactionTimerExtensionSeconds} 秒\nD-LRC：开始时间 {FormatSeconds(Config.DlrcEvaluatorStartTimeSeconds)}；周期 {Config.DlrcEvaluatorIntervalSeconds} 秒\n危机：CON 检查 {Config.CrisisContainmentCheckpointSeconds} 秒；END 激活={Config.CrisisEndActivationSeconds} 秒\nFDI：Enabled={disorder.Enabled}; InitialBase={disorder.InitialBase:0.##}; Lookback={disorder.InitialLookbackSeconds}s; SettlementHistoryCapacity={disorder.SettlementHistoryCapacity}; EventHistoryCapacity={disorder.EventHistoryCapacity}; Bands={disorder.LowMaximum:0.##}/{disorder.MediumMaximum:0.##}/{disorder.HighMinimum:0.##}\n此命令只读，不支持 RA 修改配置。";
         return true;
     }
 
@@ -181,9 +181,9 @@ public sealed partial class Plugin
         AppendModuleSummary(builder, "M03 D-LRC", Config.DlrcEvaluatorEnabled, dlrcEvaluatorService?.IsActive == true);
         AppendModuleSummary(builder, "M04 Crisis", Config.CrisisSystemEnabled, crisisManager is not null && runtimeCoordinator?.IsEmergencyEventsActiveForRound == true);
         AppendModuleSummary(builder, "M04.5 Facility Disorder", Config.FacilityDisorder.Enabled, facilityDisorderManager?.State.IsActive == true);
-        builder.AppendLine("M05 Director：NOT_IMPLEMENTED");
-        builder.AppendLine("M06 O4：NOT_IMPLEMENTED");
-        builder.Append("M07 Event Packs：NOT_IMPLEMENTED");
+        builder.AppendLine("M05 Director：FRAMEWORK_READY / PRODUCTION_DISABLED");
+        builder.AppendLine("M06 O4 Panel：DEFERRED_BY_DESIGN");
+        builder.Append("Formal Event Packs：NOT_STARTED");
         response = builder.ToString();
         return true;
     }
@@ -463,7 +463,7 @@ public sealed partial class Plugin
                 continue;
             }
 
-            string state = detection.IsActive ? $"激活，{(int)detection.Severity}级" : "未激活";
+            string state = detection.IsActive ? "激活" : "未激活";
             builder.AppendLine($"{DlrcStageReportFormatter.FormatCrisisTag(tag)}：{state}");
         }
 
@@ -480,7 +480,7 @@ public sealed partial class Plugin
         return detection is null
             ? "暂无"
             : detection.IsActive
-                ? $"{(int)detection.Severity}级"
+                ? "激活"
                 : "未激活";
     }
 
@@ -669,7 +669,7 @@ public sealed partial class Plugin
     private bool TryFormatDisorderExplain(out string response)
     {
         FacilityDisorderConfig config = Config.FacilityDisorder;
-        response = $"【Facility Disorder 规则】\n范围：{config.LowMinimum:0.##}–{config.HighMaximum:0.##}；LOW < {config.MediumMinimum:0.##}；MEDIUM < {config.HighMinimum:0.##}；HIGH ≥ {config.HighMinimum:0.##}\n首次：InitialBase={config.InitialBase:0.##} + 首次评估前 {config.InitialLookbackSeconds} 秒有效事件\n后续：严格处理 [LastProcessedAt, PeriodicTimestamp] 的新增事实，不使用 Now-30 秒窗口\n结算：只允许 PERIODIC；POST_MAJOR_WAVE、MANUAL、MANUAL_RA 只读\n原则：不改变 ResponseScore、Natural/Effective、Control、FinalLevel 或 CrisisSeverity\n权重状态：{(config.IsProvisionalBalance ? "临时平衡值" : "正式平衡值")}。";
+        response = $"【Facility Disorder 规则】\n范围：{config.LowMinimum:0.##}–{config.HighMaximum:0.##}；LOW < {config.MediumMinimum:0.##}；MEDIUM < {config.HighMinimum:0.##}；HIGH ≥ {config.HighMinimum:0.##}\n首次：InitialBase={config.InitialBase:0.##} + 首次评估前 {config.InitialLookbackSeconds} 秒有效事件\n后续：严格处理 [LastProcessedAt, PeriodicTimestamp] 的新增事实，不使用 Now-30 秒窗口\n结算：只允许 PERIODIC；POST_MAJOR_WAVE、MANUAL、MANUAL_RA 只读\n原则：不改变 ResponseScore、Natural/Effective、Control、FinalLevel 或 Crisis Active/Inactive\n权重状态：{(config.IsProvisionalBalance ? "临时平衡值" : "正式平衡值")}。";
         return true;
     }
 
@@ -818,7 +818,7 @@ public sealed partial class Plugin
 
         builder.AppendLine($"{DlrcStageReportFormatter.FormatCrisisTag(detection.Tag)}");
         builder.AppendLine($"状态：{(detection.IsActive ? "激活" : "未激活")}");
-        builder.AppendLine($"严重度：{(detection.IsActive ? $"{(int)detection.Severity}级" : "无")}");
+            builder.AppendLine($"状态：{(detection.IsActive ? "激活" : "未激活")}");
         builder.AppendLine("输入与阈值：");
         if (detection.Metrics.Count == 0)
         {
@@ -952,7 +952,7 @@ public sealed partial class Plugin
 
         foreach (CrisisTag tag in assessment.ActiveTags)
         {
-            builder.AppendLine($"{DlrcStageReportFormatter.FormatCrisisTag(tag)}：{(int)assessment.GetSeverity(tag)}级");
+            builder.AppendLine($"{DlrcStageReportFormatter.FormatCrisisTag(tag)}：{(assessment.IsActive(tag) ? "激活" : "未激活")}");
         }
     }
 

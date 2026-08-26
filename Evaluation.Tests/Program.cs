@@ -155,9 +155,9 @@ internal static class Program
             ("M05 临时配置默认关闭并使用 SKIP", DirectorConfigUsesSafeProvisionalDefaults),
             ("M05 EventRegistry 拒绝重复并保持确定顺序", DirectorRegistryRejectsDuplicateAndSorts),
             ("M05 Fake Event Definitions 默认关闭且覆盖测试矩阵", DirectorFakeDefinitionsAreDisabledAndComplete),
-            ("M05 专业响应按 Episode 和 Severity 去重", DirectorProfessionalResponseTracksEpisodes),
+            ("M05 专业响应按 Episode 和 ResponseLevel 去重", DirectorProfessionalResponseTracksEpisodes),
             ("M05 危机完全解除后重新建立 Episode", DirectorProfessionalResponseStartsNewEpisodeAfterResolve),
-            ("M05 全局 L5 不越过 BIO 实际危机等级", DirectorEligibilityUsesActualCrisisSeverity),
+            ("M05 专业响应使用 D-LRC 等级与 Active Crisis Tag", DirectorEligibilityUsesActiveCrisisAndResponseLevel),
             ("M05 多危机标签必须全部满足", DirectorEligibilityRequiresAllCrisisTags),
             ("M05 人员不足拒绝且可用人数只能缩减目标", DirectorEligibilityScalesPersonnelWithoutExpansion),
             ("M05 DESTROYED 过滤地下事件", DirectorEligibilityFiltersDestroyedFacility),
@@ -192,8 +192,10 @@ internal static class Program
              ("M05 DueAt 取消后永不迟到执行", DirectorDueAtCancellationIsIrreversible),
              ("M05 第二槽位到期只执行一次", DirectorSecondSlotExecutesOnlyOnce),
              ("M05 来源仲裁 Seed 可重复", DirectorSeededSourceSelectionIsReproducible),
-             ("M05 来源权重非法值安全回退", DirectorInvalidSourceWeightsUseStableFallback),
-         };
+            ("M05 来源权重非法值安全回退", DirectorInvalidSourceWeightsUseStableFallback),
+            ("M04/M03 Chaos 波次不应计入 Foundation 收容失败", ChaosWaveDoesNotCountAsFoundationFailure),
+            ("M05 Rollback 后必须释放忙状态", DirectorRollbackReleasesBusyState),
+        };
 
         string requestedModule = args.Length == 0 ? "ALL" : args[0].ToUpperInvariant();
         int total = 0;
@@ -295,40 +297,28 @@ internal static class Program
 
         foreach ((PopulationTier tier, int belowL3, int level3, int level4, int level5) in cases)
         {
-            AssertEqual(
-                CrisisSeverity.Inactive,
-                Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: belowL3)).Severity,
-                $"{tier} 档 BIO 的 L3 下方不应激活");
-            AssertEqual(
-                CrisisSeverity.Level3,
-                Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: level3)).Severity,
-                $"{tier} 档 BIO 的 L3 边界错误");
-            AssertEqual(
-                CrisisSeverity.Level4,
-                Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: level4)).Severity,
-                $"{tier} 档 BIO 的 L4 边界错误");
-            AssertEqual(
-                CrisisSeverity.Level5,
-                Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: level5)).Severity,
-                $"{tier} 档 BIO 的 L5 边界错误");
+            AssertTrue(!Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: belowL3)).IsActive, $"{tier} 档 BIO 阈值下方不应激活");
+            AssertTrue(Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: level3)).IsActive, $"{tier} 档 BIO 达到阈值必须激活");
+            AssertTrue(Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: level4)).IsActive, $"{tier} 档 BIO 更高事实仍应激活");
+            AssertTrue(Detect(detector, CreateSnapshot(populationTier: tier, scp0492Count: level5)).IsActive, $"{tier} 档 BIO 更高事实仍应激活");
         }
     }
 
     private static void StatelessDetectorsUseOwnFacts()
     {
         SysCrisisDetector sys = new SysCrisisDetector();
-        AssertEqual(CrisisSeverity.Inactive, Detect(sys, CreateSnapshot(scp079Present: false, scp079Tier: 5)).Severity, "079 不存在时 SYS 必须关闭");
-        AssertEqual(CrisisSeverity.Inactive, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 2)).Severity, "079 Tier2 不得触发 SYS");
-        AssertEqual(CrisisSeverity.Level3, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 3)).Severity, "079 Tier3 必须为 SYS L3");
-        AssertEqual(CrisisSeverity.Level4, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 4)).Severity, "079 Tier4 必须为 SYS L4");
-        AssertEqual(CrisisSeverity.Level5, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 5)).Severity, "079 Tier5 必须为 SYS L5");
-        AssertEqual(CrisisSeverity.Inactive, Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 6)).Severity, "非法 079 Tier 不得被误判为 SYS L5");
+        AssertTrue(!Detect(sys, CreateSnapshot(scp079Present: false, scp079Tier: 5)).IsActive, "079 不存在时 SYS 必须关闭");
+        AssertTrue(!Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 2)).IsActive, "079 Tier2 不得触发 SYS");
+        AssertTrue(Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 3)).IsActive, "079 Tier3 必须激活 SYS");
+        AssertTrue(Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 4)).IsActive, "079 Tier4 必须保持 SYS 激活");
+        AssertTrue(Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 5)).IsActive, "079 Tier5 必须保持 SYS 激活");
+        AssertTrue(!Detect(sys, CreateSnapshot(scp079Present: true, scp079Tier: 6)).IsActive, "非法 079 Tier 不得误判为 SYS");
 
         SecCrisisDetector sec = new SecCrisisDetector();
-        AssertEqual(CrisisSeverity.Inactive, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 0)).Severity, "没有敌对威胁时 SEC 必须关闭");
-        AssertEqual(CrisisSeverity.Level3, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 2, mainScpAlive: 1)).Severity, "C 档基金会两人且存在 SCP 应为 SEC L3");
-        AssertEqual(CrisisSeverity.Level4, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 1, mainScpAlive: 1)).Severity, "C 档基金会一人且存在 SCP 应为 SEC L4");
-        AssertEqual(CrisisSeverity.Level5, Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 0, mainScpAlive: 1)).Severity, "基金会为零且存在 SCP 应为 SEC L5");
+        AssertTrue(!Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 0)).IsActive, "没有敌对威胁时 SEC 必须关闭");
+        AssertTrue(Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 2, mainScpAlive: 1)).IsActive, "C 档基金会两人且存在 SCP 应激活 SEC");
+        AssertTrue(Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 1, mainScpAlive: 1)).IsActive, "C 档基金会一人且存在 SCP 应保持 SEC 激活");
+        AssertTrue(Detect(sec, CreateSnapshot(populationTier: PopulationTier.C, foundationCombatants: 0, mainScpAlive: 1)).IsActive, "基金会为零且存在 SCP 时 SEC 必须激活");
 
     }
 
@@ -337,28 +327,20 @@ internal static class Program
         WarCrisisDetector detector = new WarCrisisDetector();
         DateTime timestamp = new DateTime(2026, 8, 24, 16, 0, 0, DateTimeKind.Utc);
 
-        AssertEqual(
-            CrisisSeverity.Inactive,
-            Detect(detector, CreateSnapshot(timestamp: timestamp, warheadUnlocked: false)).Severity,
-            "Locked 核弹必须保持 WAR inactive");
-        AssertEqual(
-            CrisisSeverity.Level3,
-            Detect(detector, CreateSnapshot(timestamp: timestamp, warheadUnlocked: true)).Severity,
-            "Unlocked 核弹必须为 WAR L3");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: timestamp, warheadUnlocked: false)).IsActive, "Locked 核弹必须保持 WAR inactive");
+        AssertTrue(Detect(detector, CreateSnapshot(timestamp: timestamp, warheadUnlocked: true)).IsActive, "Unlocked 核弹必须为 WAR active");
         CrisisDetectionResult active = Detect(
             detector,
             CreateSnapshot(timestamp: timestamp, warheadUnlocked: true, warheadActive: true));
-        AssertEqual(CrisisSeverity.Level4, active.Severity, "Countdown Active 核弹必须为 WAR L4");
-        AssertTrue(active.Severity != CrisisSeverity.Level5, "没有可靠 L5 事实时不得猜测 WAR L5");
-        AssertEqual(
-            CrisisSeverity.Inactive,
+        AssertTrue(active.IsActive, "Countdown Active 核弹必须为 WAR active");
+        AssertTrue(!
             Detect(
                 detector,
                 CreateSnapshot(
                     timestamp: timestamp,
                     warheadUnlocked: true,
                     warheadActive: true,
-                    warheadDetonated: true)).Severity,
+                    warheadDetonated: true)).IsActive,
             "Detonated 后 WAR 必须 inactive");
     }
 
@@ -376,25 +358,19 @@ internal static class Program
 
         foreach ((PopulationTier tier, int level3Foundation, int level4Foundation) in cases)
         {
-            CrisisSeverity expectedAtLevel3 = tier == PopulationTier.E
-                ? CrisisSeverity.Level3
-                : CrisisSeverity.Level3;
-            AssertEqual(
-                expectedAtLevel3,
-                Detect(detector, CreateSnapshot(populationTier: tier, foundationCombatants: level3Foundation, chaosCombatants: 1)).Severity,
-                $"{tier} 档 SEC L3 边界错误");
+            AssertTrue(
+                Detect(detector, CreateSnapshot(populationTier: tier, foundationCombatants: level3Foundation, chaosCombatants: 1)).IsActive,
+                $"{tier} 档 SEC 激活边界错误");
             if (tier != PopulationTier.E)
             {
-                AssertEqual(
-                    CrisisSeverity.Level4,
-                    Detect(detector, CreateSnapshot(populationTier: tier, foundationCombatants: level4Foundation, chaosCombatants: 1)).Severity,
-                    $"{tier} 档 SEC L4 边界错误");
+                AssertTrue(
+                    Detect(detector, CreateSnapshot(populationTier: tier, foundationCombatants: level4Foundation, chaosCombatants: 1)).IsActive,
+                    $"{tier} 档 SEC 激活边界错误");
             }
 
-            AssertEqual(
-                CrisisSeverity.Level5,
-                Detect(detector, CreateSnapshot(populationTier: tier, foundationCombatants: 0, chaosCombatants: 1)).Severity,
-                $"{tier} 档 SEC L5 边界错误");
+            AssertTrue(
+                Detect(detector, CreateSnapshot(populationTier: tier, foundationCombatants: 0, chaosCombatants: 1)).IsActive,
+                $"{tier} 档 SEC 激活边界错误");
         }
     }
 
@@ -453,12 +429,12 @@ internal static class Program
         ConCrisisDetector detector = new ConCrisisDetector();
         CrisisState state = new CrisisState();
 
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: secondWaveAt, mainScpAlive: 3, scp0492Count: 4, majorWaveHistory: waves), state).Severity, "第二波刚结束不能触发 CON");
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(4).AddSeconds(59), mainScpAlive: 3, scp0492Count: 4, majorWaveHistory: waves), state).Severity, "CON 五分钟前不能触发");
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(5), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "SCP 当量下降至少 1.0 时 CON 必须解除");
-        AssertEqual(CrisisSeverity.Level3, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(10), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "第一次收容失败必须为 CON L3");
-        AssertEqual(CrisisSeverity.Level4, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(15), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "第二次连续收容失败必须为 CON L4");
-        AssertEqual(CrisisSeverity.Level5, Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(20), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "第三次连续收容失败必须为 CON L5");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: secondWaveAt, mainScpAlive: 3, scp0492Count: 4, majorWaveHistory: waves), state).IsActive, "第二波刚结束不能触发 CON");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(4).AddSeconds(59), mainScpAlive: 3, scp0492Count: 4, majorWaveHistory: waves), state).IsActive, "CON 五分钟前不能触发");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(5), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).IsActive, "SCP 当量下降时 CON 必须解除");
+        AssertTrue(Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(10), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).IsActive, "第一次收容失败必须激活 CON");
+        AssertTrue(Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(15), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).IsActive, "第二次连续收容失败必须保持 CON 激活");
+        AssertTrue(Detect(detector, CreateSnapshot(timestamp: secondWaveAt.AddMinutes(20), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).IsActive, "第三次连续收容失败必须保持 CON 激活");
     }
 
     private static void ContainmentUsesActualWaveCompletionTime()
@@ -474,8 +450,8 @@ internal static class Program
         CrisisState state = new CrisisState();
 
         Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt, mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state);
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt.AddMinutes(4).AddSeconds(59), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "CON 不得从波次开始时刻提前计算");
-        AssertEqual(CrisisSeverity.Level3, Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt.AddMinutes(5), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).Severity, "CON 必须从实际波次完成五分钟后执行第一次检查");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt.AddMinutes(4).AddSeconds(59), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).IsActive, "CON 不得从波次开始时刻提前计算");
+        AssertTrue(Detect(detector, CreateSnapshot(timestamp: secondWaveCompletedAt.AddMinutes(5), mainScpAlive: 3, scp0492Count: 0, majorWaveHistory: waves), state).IsActive, "CON 必须从实际波次完成五分钟后执行第一次检查");
     }
 
     private static void ContainmentUsesCompletionFactBaseline()
@@ -489,26 +465,24 @@ internal static class Program
         ConCrisisDetector detector = new ConCrisisDetector();
         CrisisState state = new CrisisState();
 
-        AssertEqual(
-            CrisisSeverity.Inactive,
+        AssertTrue(!
             Detect(
                 detector,
                 CreateSnapshot(
                     timestamp: secondWaveCompletedAt,
                     mainScpAlive: 1,
                     majorWaveHistory: waves),
-                state).Severity,
+                state).IsActive,
             "第二波完成时的 baseline 必须来自波次事实，而不是第一次 Detector 快照");
 
-        AssertEqual(
-            CrisisSeverity.Inactive,
+        AssertTrue(!
             Detect(
                 detector,
                 CreateSnapshot(
                     timestamp: secondWaveCompletedAt.AddMinutes(5),
                     mainScpAlive: 8,
                     majorWaveHistory: waves),
-                state).Severity,
+                state).IsActive,
             "CON 首次检查必须继续使用第二波完成时保存的 baseline");
     }
 
@@ -518,14 +492,14 @@ internal static class Program
         EndCrisisDetector detector = new EndCrisisDetector();
         CrisisState state = new CrisisState();
 
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt, warheadDetonated: true), state).Severity, "核爆后没有地表敌对共存时 END 必须关闭");
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt, warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "地表僵持刚开始时 END 必须关闭");
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(4).AddSeconds(59), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "END 4:59 必须关闭");
-        AssertEqual(CrisisSeverity.Level3, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(5), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "END 5:00 必须为 L3");
-        AssertEqual(CrisisSeverity.Level4, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(8), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "END 8:00 必须为 L4");
-        AssertEqual(CrisisSeverity.Level5, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(12), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "END 12:00 必须为 L5");
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(13), warheadDetonated: true), state).Severity, "地表僵持消失时 END 必须重置");
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(18), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).Severity, "僵持重新开始时不得沿用旧 END 计时");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: detonationAt, warheadDetonated: true), state).IsActive, "核爆后没有地表敌对共存时 END 必须关闭");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: detonationAt, warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).IsActive, "地表僵持刚开始时 END 必须关闭");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(4).AddSeconds(59), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).IsActive, "END 4:59 必须关闭");
+        AssertTrue(Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(5), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).IsActive, "END 5:00 必须激活");
+        AssertTrue(Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(8), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).IsActive, "END 8:00 必须保持激活");
+        AssertTrue(Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(12), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).IsActive, "END 12:00 必须保持激活");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(13), warheadDetonated: true), state).IsActive, "地表僵持消失时 END 必须重置");
+        AssertTrue(!Detect(detector, CreateSnapshot(timestamp: detonationAt.AddMinutes(18), warheadDetonated: true, surfaceFoundationCombatants: 1, surfaceChaosCombatants: 1), state).IsActive, "僵持重新开始时不得沿用旧 END 计时");
     }
 
     private static void EndRequiresReliableDetonationFact()
@@ -543,9 +517,8 @@ internal static class Program
             surfaceChaosCombatants: 1);
         EndCrisisDetector detector = new EndCrisisDetector();
 
-        AssertEqual(
-            CrisisSeverity.Inactive,
-            Detect(detector, snapshotWithoutFact).Severity,
+        AssertTrue(!
+            Detect(detector, snapshotWithoutFact).IsActive,
             "没有可靠 DetonatedAt 时不得把第一次观察时间冒充真实核爆时间");
     }
 
@@ -553,16 +526,16 @@ internal static class Program
     {
         GoiCrisisDetector detector = new GoiCrisisDetector();
         RoundSnapshot inactiveSnapshot = CreateSnapshot(hostileThirdPartyActive: false, hostileThirdPartyCombatants: 3);
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, inactiveSnapshot, CreateCrisisResult(inactiveSnapshot, 5, FoundationStrength.CRITICAL)).Severity, "没有注册敌对第三方时 GOI 必须关闭");
+        AssertTrue(!Detect(detector, inactiveSnapshot, CreateCrisisResult(inactiveSnapshot, 5, FoundationStrength.CRITICAL)).IsActive, "没有注册敌对第三方时 GOI 必须关闭");
 
         RoundSnapshot lowLevelSnapshot = CreateSnapshot(hostileThirdPartyActive: true, hostileThirdPartyCombatants: 3);
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, lowLevelSnapshot, CreateCrisisResult(lowLevelSnapshot, 2, FoundationStrength.CRITICAL)).Severity, "Global Level 低于 3 时 GOI 必须关闭");
+        AssertTrue(!Detect(detector, lowLevelSnapshot, CreateCrisisResult(lowLevelSnapshot, 2, FoundationStrength.CRITICAL)).IsActive, "Global Level 低于 3 时 GOI 必须关闭");
 
         RoundSnapshot adequateSnapshot = CreateSnapshot(hostileThirdPartyActive: true, hostileThirdPartyCombatants: 3);
-        AssertEqual(CrisisSeverity.Inactive, Detect(detector, adequateSnapshot, CreateCrisisResult(adequateSnapshot, 3, FoundationStrength.ADEQUATE)).Severity, "基金会并非明显劣势时 GOI 必须关闭");
+        AssertTrue(!Detect(detector, adequateSnapshot, CreateCrisisResult(adequateSnapshot, 3, FoundationStrength.ADEQUATE)).IsActive, "基金会并非明显劣势时 GOI 必须关闭");
 
         RoundSnapshot activeSnapshot = CreateSnapshot(hostileThirdPartyActive: true, hostileThirdPartyCombatants: 3);
-        AssertEqual(CrisisSeverity.Level3, Detect(detector, activeSnapshot, CreateCrisisResult(activeSnapshot, 3, FoundationStrength.WEAK)).Severity, "敌对第三方、Global L3 与基金会劣势同时存在时 GOI 应为 L3");
+        AssertTrue(Detect(detector, activeSnapshot, CreateCrisisResult(activeSnapshot, 3, FoundationStrength.WEAK)).IsActive, "敌对第三方、Global L3 与基金会劣势同时存在时 GOI 应激活");
     }
 
     private static CrisisDetectionResult Detect(ICrisisDetector detector, RoundSnapshot snapshot, DlrcEvaluationResult result)
@@ -608,9 +581,9 @@ internal static class Program
             new[] { CrisisTag.BIO, CrisisTag.SYS, CrisisTag.WAR },
             assessment.ActiveTags,
             "危机标签顺序错误");
-        AssertEqual(CrisisSeverity.Level3, assessment.GetSeverity(CrisisTag.BIO), "BIO 严重度错误");
-        AssertEqual(CrisisSeverity.Level4, assessment.GetSeverity(CrisisTag.SYS), "SYS 严重度错误");
-        AssertEqual(CrisisSeverity.Level4, assessment.GetSeverity(CrisisTag.WAR), "核弹倒计时必须产生 WAR L4");
+        AssertTrue(assessment.IsActive(CrisisTag.BIO), "BIO 必须激活");
+        AssertTrue(assessment.IsActive(CrisisTag.SYS), "SYS 必须激活");
+        AssertTrue(assessment.IsActive(CrisisTag.WAR), "WAR 必须激活");
 
         CrisisAssessment? retained = manager.Evaluate(new DlrcEvaluationCompletedEvent(
             1002,
@@ -688,14 +661,13 @@ internal static class Program
                 new CrisisDetectionResult(
                     CrisisTag.BIO,
                     true,
-                    CrisisSeverity.Level4,
                     "Zombie pressure",
                     new Dictionary<string, double> { ["ZombieCount"] = 5d }),
                 new CrisisDetectionResult(
                     CrisisTag.WAR,
                     true,
-                    CrisisSeverity.Level4,
-                    "Countdown active"),
+                    "Countdown active",
+                    new Dictionary<string, double>()),
             });
         string report = (string)format!.Invoke(null, new object?[] { snapshot, result, assessment })!;
 
@@ -711,7 +683,7 @@ internal static class Program
             "FoundationCombatShare=",
             "CrisisCode=",
             "BIO=Active:True",
-            "WAR=Active:True;Severity=4",
+            "WAR=Active:True",
         };
         foreach (string token in requiredTokens)
         {
@@ -867,13 +839,13 @@ internal static class Program
             manager.TryDiagnose(CrisisTag.BIO, snapshot, result, out CrisisDetectionResult? detection),
             "BIO 手动诊断必须调用正式 Detector");
         AssertTrue(detection is not null, "BIO 手动诊断必须返回检测结果");
-        AssertEqual(CrisisSeverity.Level4, detection!.Severity, "BIO 手动诊断必须保留正式阈值判定");
+        AssertTrue(detection!.IsActive, "BIO 手动诊断必须保留正式阈值判定");
         AssertTrue(manager.CurrentCrisisAssessment is null, "手动诊断不得写入真实 CrisisAssessment");
 
         AssertTrue(
             manager.TryDiagnose(CrisisTag.WAR, snapshot, result, out CrisisDetectionResult? war),
             "WAR 必须复用正式 Detector 提供诊断");
-        AssertEqual(CrisisSeverity.Inactive, war!.Severity, "Locked WAR 诊断必须 inactive");
+        AssertTrue(!war!.IsActive, "Locked WAR 诊断必须 inactive");
     }
 
     private static void CrisisDiagnosticSnapshotFactoryPreservesSource()
@@ -926,7 +898,7 @@ internal static class Program
             result,
             new[]
             {
-                new CrisisDetectionResult(CrisisTag.BIO, true, CrisisSeverity.Level4, "ZombieCount >= L4Threshold"),
+                new CrisisDetectionResult(CrisisTag.BIO, true, "ZombieCount >= ActivationThreshold"),
             });
 
         string report = DlrcStageReportFormatter.FormatStandard(snapshot, result, assessment);
@@ -936,7 +908,7 @@ internal static class Program
             "人口编制：C",
             "基金会战斗人员：11",
             "核弹已爆炸：否",
-            "生化危机（BIO）：4级",
+            "生化危机（BIO）：激活",
         };
         foreach (string token in requiredTokens)
         {
@@ -959,7 +931,7 @@ internal static class Program
             DlrcEvaluationTrigger.MANUAL_RA,
             snapshot,
             result,
-            new[] { new CrisisDetectionResult(CrisisTag.BIO, true, CrisisSeverity.Level3, "Active") });
+            new[] { new CrisisDetectionResult(CrisisTag.BIO, true, "Active") });
         CrisisAssessment stale = new CrisisAssessment(
             18,
             DlrcEvaluationTrigger.PERIODIC,
@@ -1003,21 +975,21 @@ internal static class Program
         AssertTrue(
             manager.TryRunContainmentCheckpoint(checkpoint, checkpointResult, commit: false, out CrisisDetectionResult? dryRun),
             "CON Dry Run 必须在已有正式基线时执行");
-        AssertEqual(CrisisSeverity.Level3, dryRun!.Severity, "CON Dry Run 必须按正式 Detector 预测失败结果");
+        AssertTrue(dryRun!.IsActive, "CON Dry Run 必须按正式 Detector 预测失败结果");
 
         AssertTrue(
             manager.TryDiagnose(CrisisTag.CON, checkpoint, checkpointResult, out CrisisDetectionResult? afterDryRun),
             "CON 诊断必须可查询");
-        AssertEqual(CrisisSeverity.Inactive, afterDryRun!.Severity, "CON Dry Run 不得推进真实 FailureStreak");
+        AssertTrue(!afterDryRun!.IsActive, "CON Dry Run 不得推进真实 FailureStreak");
 
         AssertTrue(
             manager.TryRunContainmentCheckpoint(checkpoint, checkpointResult, commit: true, out CrisisDetectionResult? committed),
             "CON commit 必须在已有正式基线时执行");
-        AssertEqual(CrisisSeverity.Level3, committed!.Severity, "CON commit 必须推进一次正式失败状态");
+        AssertTrue(committed!.IsActive, "CON commit 必须推进一次正式失败状态");
         AssertTrue(
             manager.TryDiagnose(CrisisTag.CON, checkpoint, checkpointResult, out CrisisDetectionResult? afterCommit),
             "CON commit 后仍必须可诊断");
-        AssertEqual(CrisisSeverity.Level3, afterCommit!.Severity, "CON commit 后正式 FailureStreak 必须保留");
+        AssertTrue(afterCommit!.IsActive, "CON commit 后正式 FailureStreak 必须保留");
     }
 
     private static void EndDiagnosticSimulationUsesIsolatedState()
@@ -1035,7 +1007,7 @@ internal static class Program
         AssertTrue(
             manager.TryDiagnoseEndSimulation(simulated, simulatedResult, 480, out CrisisDetectionResult? detection),
             "END 快速模拟必须使用正式 END Detector");
-        AssertEqual(CrisisSeverity.Level4, detection!.Severity, "480 秒地表僵持必须为 END L4");
+        AssertTrue(detection!.IsActive, "480 秒地表僵持必须激活 END");
         AssertTrue(!source.WarheadDetonated, "END 模拟不得改写真实核弹事实");
         AssertEqual(0, source.SurfaceFoundationCombatants, "END 模拟不得改写真实地表人数");
     }
@@ -1227,51 +1199,51 @@ internal static class Program
 
     private static void FdiInitial079AndSysDoNotDoubleCount()
     {
-        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, CurrentScp079Tier = 2d, CurrentCrisisPerLevel = 1d };
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, CurrentScp079Tier = 2d, CurrentCrisisPerActive = 1d };
         FacilityDisorderService service = new FacilityDisorderService(config);
         DateTime at = Utc(6, 31);
         service.StartRound(at.AddMinutes(-5), 16, 12);
         service.Record(new DisorderEvent("079-established", at.AddMinutes(-151), DisorderEventCategory.Scp079TierChanged, 2d, "04:00 Tier3;仍为Tier3", isRepresentedByCurrentStock: true));
         service.Record(new DisorderEvent("079-upgrade", at.AddMinutes(-61), DisorderEventCategory.Scp079TierChanged, 2d, "05:30 T2->T3;ExpressedBySYS", isRepresentedByCurrentStock: true));
         RoundSnapshot snapshot = CreateSnapshot(roundId: 12, timestamp: at, scp079Present: true, scp079Tier: 3);
-        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, (CrisisTag.SYS, CrisisSeverity.Level3));
+        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, CrisisTag.SYS);
 
         FacilityDisorderSettlement? settlement = SettleFdi(service, at, CreateStock(snapshot, assessment), 12, assessment);
 
         AssertTrue(settlement is not null, "SYS 存量测试必须结算");
-        AssertNear(53d, service.State.CurrentFacilityDisorder, "SYS 已表达 079 Tier3 时不得再叠加 079 Tier Delta");
-        AssertNear(3d, settlement!.CurrentStockAdjustment, "SYS L3 当前存量调整错误");
+        AssertNear(51d, service.State.CurrentFacilityDisorder, "SYS 已表达 079 Tier3 时不得再叠加 079 Tier Delta");
+        AssertNear(1d, settlement!.CurrentStockAdjustment, "SYS 当前存量调整错误");
         AssertNear(0d, settlement.RecentTransientDelta, "已由 SYS 表达的 079 变化不得重复进入首次窗口");
     }
 
     private static void FdiInitialWarAndWarheadDoNotDoubleCount()
     {
-        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, CurrentCrisisPerLevel = 1d };
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, CurrentCrisisPerActive = 1d };
         FacilityDisorderService service = new FacilityDisorderService(config);
         DateTime at = Utc(6, 31);
         service.StartRound(at.AddMinutes(-5), 16, 13);
         RoundSnapshot snapshot = CreateSnapshot(roundId: 13, timestamp: at, warheadUnlocked: true, warheadActive: true);
-        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, (CrisisTag.WAR, CrisisSeverity.Level4));
+        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, CrisisTag.WAR);
         FacilityDisorderSettlement? settlement = SettleFdi(service, at, CreateStock(snapshot, assessment), 13, assessment);
 
         AssertTrue(settlement is not null, "WAR 存量测试必须结算");
-        AssertNear(54d, service.State.CurrentFacilityDisorder, "WAR 危机已表达核弹状态时不得重复计算 Unlock/Countdown");
-        AssertNear(4d, settlement!.CurrentStockAdjustment, "WAR L4 当前存量调整错误");
+        AssertNear(51d, service.State.CurrentFacilityDisorder, "WAR 危机已表达核弹状态时不得重复计算 Unlock/Countdown");
+        AssertNear(1d, settlement!.CurrentStockAdjustment, "WAR 当前存量调整错误");
     }
 
     private static void FdiInitialCrisisStockIsIncluded()
     {
-        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, CurrentCrisisPerLevel = 1d };
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 50d, CurrentCrisisPerActive = 1d };
         FacilityDisorderService service = new FacilityDisorderService(config);
         DateTime at = Utc(6, 31);
         service.StartRound(at.AddMinutes(-5), 16, 14);
         RoundSnapshot snapshot = CreateSnapshot(roundId: 14, timestamp: at);
-        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, (CrisisTag.BIO, CrisisSeverity.Level3));
+        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, CrisisTag.BIO);
         service.Record(new DisorderEvent("sys-active", at.AddMinutes(-151), DisorderEventCategory.CrisisTransition, 3d, "04:00 SYS active;仍为Active", isRepresentedByCurrentStock: true));
         FacilityDisorderSettlement? settlement = SettleFdi(service, at, CreateStock(snapshot, assessment), 14, assessment);
 
         AssertTrue(settlement is not null, "危机存量测试必须结算");
-        AssertNear(53d, service.State.CurrentFacilityDisorder, "06:31 当前危机状态必须进入 InitialFDI");
+        AssertNear(51d, service.State.CurrentFacilityDisorder, "06:31 当前危机状态必须进入 InitialFDI");
     }
 
     private static void FdiPostInitializationUsesPureIncrement()
@@ -1429,14 +1401,14 @@ internal static class Program
         service.StartRound(initialAt.AddMinutes(-5), 16, 33);
         service.Record(new DisorderEvent("sys-transition", initialAt.AddSeconds(-30), DisorderEventCategory.CrisisTransition, 3d, "SYS OFF->L3; current stock expresses final state", isRepresentedByCurrentStock: true));
         RoundSnapshot initialSnapshot = CreateSnapshot(roundId: 33, timestamp: initialAt);
-        CrisisAssessment initialAssessment = CreateCrisisAssessment(initialSnapshot, (CrisisTag.SYS, CrisisSeverity.Level3));
+        CrisisAssessment initialAssessment = CreateCrisisAssessment(initialSnapshot, CrisisTag.SYS);
         FacilityDisorderSettlement? initial = SettleFdi(service, initialAt, CreateStock(initialSnapshot, initialAssessment), evaluationId: 33, roundId: 33, assessment: initialAssessment);
-        AssertNear(53d, service.State.CurrentFacilityDisorder, "首次结算必须只使用 SYS 当前存量");
+        AssertNear(51d, service.State.CurrentFacilityDisorder, "首次结算必须只使用 SYS 当前存量");
         AssertNear(0d, initial!.RecentTransientDelta, "首次结算不得重复使用 SYS Transition");
         service.Record(new DisorderEvent("sys-escalation-after-init", initialAt.AddSeconds(30), DisorderEventCategory.CrisisTransition, 4d, "SYS L3->L4; post-initial increment", isRepresentedByCurrentStock: true));
         FacilityDisorderSettlement? next = SettleFdi(service, initialAt.AddSeconds(30), new FacilityDisorderStockSnapshot(0, 0, 0, 0, false, 0, null, false, false, false), evaluationId: 34, roundId: 33);
         AssertNear(4d, next!.RecentTransientDelta, "首次结算后 CrisisTransition 必须作为正常增量");
-        AssertNear(57d, service.State.CurrentFacilityDisorder, "后续 CrisisTransition 增量结果错误");
+        AssertNear(55d, service.State.CurrentFacilityDisorder, "后续 CrisisTransition 增量结果错误");
     }
 
     private static void FdiRecentCombatTransientSurvivesCurrentStock()
@@ -1457,14 +1429,14 @@ internal static class Program
         DateTime initialAt = Utc(6, 31);
         service.StartRound(initialAt.AddMinutes(-5), 16, 36);
         RoundSnapshot initialSnapshot = CreateSnapshot(roundId: 36, timestamp: initialAt, scp079Present: true, scp079Tier: 2);
-        CrisisAssessment initialAssessment = CreateCrisisAssessment(initialSnapshot, (CrisisTag.SYS, CrisisSeverity.Level3));
+        CrisisAssessment initialAssessment = CreateCrisisAssessment(initialSnapshot, CrisisTag.SYS);
         SettleFdi(service, initialAt, CreateStock(initialSnapshot, initialAssessment), evaluationId: 36, roundId: 36, assessment: initialAssessment);
         DateTime nextAt = initialAt.AddSeconds(30);
         service.Record(new DisorderEvent("079-upgrade", nextAt, DisorderEventCategory.Scp079TierChanged, 0d, "T2->T3; ExpressedBySYS", isRepresentedByCurrentStock: true));
         service.Record(new DisorderEvent("sys-escalation", nextAt, DisorderEventCategory.CrisisTransition, 4d, "SYS L3->L4", isRepresentedByCurrentStock: true));
         RoundSnapshot nextSnapshot = CreateSnapshot(roundId: 36, timestamp: nextAt, scp079Present: true, scp079Tier: 3);
         DlrcEvaluationResult nextResult = CreateResult(nextSnapshot);
-        CrisisAssessment nextAssessment = new CrisisAssessment(37, DlrcEvaluationTrigger.PERIODIC, nextSnapshot, nextResult, new[] { new CrisisDetectionResult(CrisisTag.SYS, true, CrisisSeverity.Level4, "test") });
+        CrisisAssessment nextAssessment = new CrisisAssessment(37, DlrcEvaluationTrigger.PERIODIC, nextSnapshot, nextResult, new[] { new CrisisDetectionResult(CrisisTag.SYS, true, "test") });
         FacilityDisorderSettlement? settlement = SettleFdi(service, nextAt, CreateStock(nextSnapshot, nextAssessment), evaluationId: 37, roundId: 36, assessment: nextAssessment);
         AssertNear(4d, settlement!.RecentTransientDelta, "079/SYS 升级链只能保留 SYS 非零 Delta");
     }
@@ -1475,7 +1447,7 @@ internal static class Program
         DateTime initialAt = Utc(6, 31);
         service.StartRound(initialAt.AddMinutes(-5), 16, 38);
         RoundSnapshot initialSnapshot = CreateSnapshot(roundId: 38, timestamp: initialAt, scp079Present: true, scp079Tier: 3);
-        CrisisAssessment initialAssessment = CreateCrisisAssessment(initialSnapshot, (CrisisTag.SYS, CrisisSeverity.Level3));
+        CrisisAssessment initialAssessment = CreateCrisisAssessment(initialSnapshot, CrisisTag.SYS);
         SettleFdi(service, initialAt, CreateStock(initialSnapshot, initialAssessment), evaluationId: 38, roundId: 38, assessment: initialAssessment);
         DateTime nextAt = initialAt.AddSeconds(30);
         service.Record(new DisorderEvent("079-removed", nextAt, DisorderEventCategory.Scp079TierChanged, 0d, "T3->Removed; ExpressedBySYS", isRepresentedByCurrentStock: true));
@@ -1491,13 +1463,13 @@ internal static class Program
 
     private static CrisisAssessment CreateCrisisAssessment(
         RoundSnapshot snapshot,
-        params (CrisisTag Tag, CrisisSeverity Severity)[] activeTags)
+        params CrisisTag[] activeTags)
     {
         DlrcEvaluationResult result = CreateResult(snapshot);
         List<CrisisDetectionResult> detections = new List<CrisisDetectionResult>();
-        foreach ((CrisisTag tag, CrisisSeverity severity) in activeTags)
+        foreach (CrisisTag tag in activeTags)
         {
-            detections.Add(new CrisisDetectionResult(tag, true, severity, "test"));
+            detections.Add(new CrisisDetectionResult(tag, true, "test"));
         }
         return new CrisisAssessment(snapshot.RoundId, DlrcEvaluationTrigger.PERIODIC, snapshot, result, detections);
     }
@@ -1505,12 +1477,12 @@ internal static class Program
     private static CrisisAssessment CreateDirectorAssessment(
         RoundSnapshot snapshot,
         DlrcEvaluationResult result,
-        params (CrisisTag Tag, CrisisSeverity Severity)[] activeTags)
+        params CrisisTag[] activeTags)
     {
         List<CrisisDetectionResult> detections = new List<CrisisDetectionResult>();
-        foreach ((CrisisTag tag, CrisisSeverity severity) in activeTags)
+        foreach (CrisisTag tag in activeTags)
         {
-            detections.Add(new CrisisDetectionResult(tag, true, severity, "director-test"));
+            detections.Add(new CrisisDetectionResult(tag, true, "director-test"));
         }
 
         return new CrisisAssessment(snapshot.RoundId, DlrcEvaluationTrigger.PERIODIC, snapshot, result, detections);
@@ -1551,7 +1523,6 @@ internal static class Program
     private static EventDefinition CreateDirectorDefinitionWithCrisis(
         string eventId,
         EventResponseLevel level,
-        CrisisSeverity severity,
         IReadOnlyList<CrisisTag> tags,
         EventSource source,
         bool requiresUndergroundFacility = false)
@@ -1563,7 +1534,6 @@ internal static class Program
             source,
             level,
             tags,
-            severity,
             TierPersonnelPlan.Uniform(6),
             TierPersonnelPlan.Uniform(2),
             isEnabled: true,
@@ -1629,7 +1599,6 @@ internal static class Program
             EventSource.ProfessionalCrisisResponse,
             EventResponseLevel.L3,
             new[] { CrisisTag.BIO },
-            CrisisSeverity.Level3,
             TierPersonnelPlan.Uniform(4),
             TierPersonnelPlan.Uniform(2),
             isEnabled: true,
@@ -1651,7 +1620,6 @@ internal static class Program
             EventSource.ProfessionalCrisisResponse,
             EventResponseLevel.L4,
             new[] { CrisisTag.BIO, CrisisTag.SYS },
-            CrisisSeverity.Level4,
             TierPersonnelPlan.Uniform(4),
             TierPersonnelPlan.Uniform(2),
             isEnabled: true,
@@ -1660,7 +1628,7 @@ internal static class Program
             requiresUndergroundFacility: false);
 
         AssertSequence(new[] { CrisisTag.BIO, CrisisTag.SYS }, definition.RequiredCrisisTags, "多危机标签必须完整保留，后续资格判断才可以执行 AND");
-        AssertEqual(CrisisSeverity.Level4, definition.RequiredCrisisSeverity, "多标签事件的最低危机严重度必须保留");
+        AssertEqual(EventResponseLevel.L4, definition.RequiredResponseLevel, "事件必须保留 D-LRC 响应等级");
     }
 
     private static void DirectorDefinitionExposesTierPersonnelPlan()
@@ -1672,7 +1640,6 @@ internal static class Program
             EventSource.Foundation,
             EventResponseLevel.L2,
             Array.Empty<CrisisTag>(),
-            CrisisSeverity.Inactive,
             new TierPersonnelPlan(2, 3, 4, 5, 6),
             new TierPersonnelPlan(1, 1, 2, 2, 3),
             isEnabled: true,
@@ -1737,7 +1704,7 @@ internal static class Program
 
         AssertTrue(definitions.Count >= 8, "Fake Definitions 必须覆盖专业 BIO、Foundation、Chaos、GOI 与 NON_SUPPORT");
         AssertTrue(definitions.All(definition => !definition.IsEnabled), "Phase 1 Fake Definitions 默认必须关闭");
-        AssertTrue(definitions.Any(definition => definition.Source == EventSource.ProfessionalCrisisResponse && definition.RequiredCrisisSeverity == CrisisSeverity.Level3), "必须存在 BIO L3 专业响应定义");
+        AssertTrue(definitions.Any(definition => definition.Source == EventSource.ProfessionalCrisisResponse && definition.RequiredResponseLevel == EventResponseLevel.L3 && definition.RequiredCrisisTags.Contains(CrisisTag.BIO)), "必须存在 BIO L3 专业响应定义");
         AssertTrue(definitions.Any(definition => definition.Category == EventCategory.NonSupport), "必须存在 NON_SUPPORT 测试定义");
         AssertEqual(definitions.Count, definitions.Select(definition => definition.EventId).Distinct(StringComparer.Ordinal).Count(), "Fake Definitions 的 EventId 必须唯一");
     }
@@ -1746,60 +1713,59 @@ internal static class Program
     {
         RoundSnapshot snapshot = CreateSnapshot(roundId: 501);
         ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
-        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG), (CrisisTag.BIO, CrisisSeverity.Level3)));
+        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG), CrisisTag.BIO));
 
-        AssertTrue(tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level3), "新 BIO Episode 的 L3 必须可消费");
-        AssertTrue(tracker.Consume(CrisisTag.BIO, CrisisSeverity.Level3, "cycle-1"), "成功提交后必须消费 L3");
-        AssertTrue(!tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level3), "同一 Episode 同一 Severity 不得重复消费");
+        AssertTrue(tracker.CanConsume(CrisisTag.BIO, EventResponseLevel.L3), "新 BIO Episode 的 L3 必须可消费");
+        AssertTrue(tracker.Consume(CrisisTag.BIO, EventResponseLevel.L3, "cycle-1"), "成功提交后必须消费 L3");
+        AssertTrue(!tracker.CanConsume(CrisisTag.BIO, EventResponseLevel.L3), "同一 Episode 同一响应等级不得重复消费");
 
-        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG), (CrisisTag.BIO, CrisisSeverity.Level4)));
-        AssertTrue(tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level4), "同一 Episode 的升级 L4 必须独立可消费");
+        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG), CrisisTag.BIO));
+        AssertTrue(tracker.CanConsume(CrisisTag.BIO, EventResponseLevel.L4), "同一 Episode 的升级 L4 必须独立可消费");
     }
 
     private static void DirectorProfessionalResponseStartsNewEpisodeAfterResolve()
     {
         RoundSnapshot snapshot = CreateSnapshot(roundId: 502);
         ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
-        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG), (CrisisTag.BIO, CrisisSeverity.Level3)));
-        AssertTrue(tracker.Consume(CrisisTag.BIO, CrisisSeverity.Level3, "cycle-1"), "首个 Episode 必须可消费");
+        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG), CrisisTag.BIO));
+        AssertTrue(tracker.Consume(CrisisTag.BIO, EventResponseLevel.L3, "cycle-1"), "首个 Episode 必须可消费");
 
         tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG)));
-        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG), (CrisisTag.BIO, CrisisSeverity.Level3)));
+        tracker.Observe(CreateDirectorAssessment(snapshot, CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG), CrisisTag.BIO));
 
-        AssertTrue(tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level3), "完全解除后再次激活必须建立新 Episode");
+        AssertTrue(tracker.CanConsume(CrisisTag.BIO, EventResponseLevel.L3), "完全解除后再次激活必须建立新 Episode");
         AssertTrue(tracker.EpisodeId >= 2, "新 Episode 必须具有新的序号");
     }
 
-    private static void DirectorEligibilityUsesActualCrisisSeverity()
+    private static void DirectorEligibilityUsesActiveCrisisAndResponseLevel()
     {
         RoundSnapshot snapshot = CreateSnapshot(roundId: 503);
         DlrcEvaluationResult result = CreateCrisisResult(snapshot, 5, FoundationStrength.STRONG);
-        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, CrisisTag.BIO);
         DirectorContext context = CreateDirectorContext(result, assessment, foundationAvailable: 6);
         ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
         tracker.Observe(assessment);
 
         EventCandidate candidate = new EventEligibilityService().Evaluate(
             context,
-            CreateDirectorDefinitionWithCrisis("bio-l4", EventResponseLevel.L4, CrisisSeverity.Level4, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse),
+            CreateDirectorDefinitionWithCrisis("bio-l4", EventResponseLevel.L4, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse),
             tracker);
 
-        AssertTrue(!candidate.IsLegal, "全局 L5 不能越过当前 BIO L3 直接选择 BIO L4");
-        AssertTrue(candidate.Reason.Contains("Crisis", StringComparison.OrdinalIgnoreCase), "拒绝理由必须明确指出危机条件");
+        AssertTrue(candidate.IsLegal, "专业响应资格应由 D-LRC 响应等级和 Active Crisis Tag 决定");
     }
 
     private static void DirectorEligibilityRequiresAllCrisisTags()
     {
         RoundSnapshot snapshot = CreateSnapshot(roundId: 504);
         DlrcEvaluationResult result = CreateCrisisResult(snapshot, 5, FoundationStrength.STRONG);
-        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, CrisisTag.BIO);
         DirectorContext context = CreateDirectorContext(result, assessment, foundationAvailable: 6);
         ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
         tracker.Observe(assessment);
 
         EventCandidate candidate = new EventEligibilityService().Evaluate(
             context,
-            CreateDirectorDefinitionWithCrisis("bio-sys", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.BIO, CrisisTag.SYS }, EventSource.ProfessionalCrisisResponse),
+            CreateDirectorDefinitionWithCrisis("bio-sys", EventResponseLevel.L3, new[] { CrisisTag.BIO, CrisisTag.SYS }, EventSource.ProfessionalCrisisResponse),
             tracker);
 
         AssertTrue(!candidate.IsLegal, "BIO+SYS 事件缺少 SYS 时必须拒绝，而不是按 OR 通过");
@@ -1817,7 +1783,6 @@ internal static class Program
             EventSource.Foundation,
             EventResponseLevel.L2,
             Array.Empty<CrisisTag>(),
-            CrisisSeverity.Inactive,
             TierPersonnelPlan.Uniform(6),
             TierPersonnelPlan.Uniform(2),
             isEnabled: true,
@@ -1837,7 +1802,7 @@ internal static class Program
         RoundSnapshot snapshot = CreateSnapshot(roundId: 506);
         DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
         DirectorContext context = CreateDirectorContext(result, null, facilityState: FacilityState.Destroyed, foundationAvailable: 6);
-        EventDefinition definition = CreateDirectorDefinitionWithCrisis("underground", EventResponseLevel.L2, CrisisSeverity.Inactive, Array.Empty<CrisisTag>(), EventSource.Foundation, requiresUndergroundFacility: true);
+        EventDefinition definition = CreateDirectorDefinitionWithCrisis("underground", EventResponseLevel.L2, Array.Empty<CrisisTag>(), EventSource.Foundation, requiresUndergroundFacility: true);
 
         EventCandidate candidate = new EventEligibilityService().Evaluate(context, definition, new ProfessionalResponseTracker());
 
@@ -1849,7 +1814,7 @@ internal static class Program
         RoundSnapshot snapshot = CreateSnapshot(roundId: 507);
         DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
         DirectorContext context = CreateDirectorContext(result, null, goiAvailable: 3);
-        EventDefinition definition = CreateDirectorDefinitionWithCrisis("goi-normal", EventResponseLevel.L2, CrisisSeverity.Inactive, Array.Empty<CrisisTag>(), EventSource.Goi);
+        EventDefinition definition = CreateDirectorDefinitionWithCrisis("goi-normal", EventResponseLevel.L2, Array.Empty<CrisisTag>(), EventSource.Goi);
 
         EventCandidate candidate = new EventEligibilityService().Evaluate(context, definition, new ProfessionalResponseTracker());
 
@@ -1860,11 +1825,11 @@ internal static class Program
     {
         RoundSnapshot snapshot = CreateSnapshot(roundId: 508);
         DlrcEvaluationResult result = CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG);
-        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, CrisisTag.BIO);
         DirectorContext context = CreateDirectorContext(result, assessment);
         ProfessionalResponseTracker tracker = new ProfessionalResponseTracker();
         tracker.Observe(assessment);
-        EventCandidate professional = new EventEligibilityService().Evaluate(context, CreateDirectorDefinitionWithCrisis("professional", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse), tracker);
+        EventCandidate professional = new EventEligibilityService().Evaluate(context, CreateDirectorDefinitionWithCrisis("professional", EventResponseLevel.L3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse), tracker);
         EventCandidate ordinary = new EventEligibilityService().Evaluate(context, CreateDirectorDefinition("ordinary", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1), tracker);
 
         SelectionDecision? decision = new EventSelectionService(new SupportSourceArbitrator(new EventDirectorConfig())).SelectSupport(context, new[] { professional, ordinary }, tracker);
@@ -2047,13 +2012,13 @@ internal static class Program
     {
         RoundSnapshot snapshot = CreateSnapshot(roundId: 607);
         DlrcEvaluationResult result = CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG);
-        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
-        EventDefinition definition = CreateDirectorDefinitionWithCrisis("professional-fail", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, CrisisTag.BIO);
+        EventDefinition definition = CreateDirectorDefinitionWithCrisis("professional-fail", EventResponseLevel.L3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse);
         EventDirector director = CreateDirectorForLifecycle(definition);
         DirectorCycle cycle = director.SelectCycle(CreateDirectorContext(result, assessment))!;
 
         AssertTrue(director.Advance(EventLifecycleState.Prepared, false), "专业事件 Prepare 失败必须进入 Failed");
-        AssertTrue(director.Tracker.CanConsume(CrisisTag.BIO, CrisisSeverity.Level3), "Prepare 失败不得消费专业响应");
+        AssertTrue(director.Tracker.CanConsume(CrisisTag.BIO, EventResponseLevel.L3), "Prepare 失败不得消费专业响应");
         AssertTrue(cycle.SelectedSupport is not null, "失败前仍应保留候选诊断信息");
     }
 
@@ -2090,7 +2055,7 @@ internal static class Program
     {
         RoundSnapshot snapshot = CreateSnapshot(roundId: 610, populationTier: PopulationTier.D, timestamp: Utc(17, 0));
         DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
-        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3));
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, CrisisTag.BIO);
         MajorWaveHistory history = new MajorWaveHistory();
         MajorWaveRecord wave = history.Record("runtime-wave", "Chaos", PopulationTier.D, 4, new[] { 1, 2, 3, 4 }, snapshot.Timestamp, snapshot.Timestamp.AddSeconds(5));
         FacilityDisorderState fdi = new FacilityDisorderState();
@@ -2204,7 +2169,6 @@ internal static class Program
             EventSource.Foundation,
             EventResponseLevel.L0,
             Array.Empty<CrisisTag>(),
-            CrisisSeverity.Inactive,
             TierPersonnelPlan.Uniform(2),
             TierPersonnelPlan.Uniform(1),
             isEnabled: false,
@@ -2308,12 +2272,12 @@ internal static class Program
 
     private static void DirectorProfessionalSelectionIsProvisional()
     {
-        EventDefinition bio = CreateDirectorDefinitionWithCrisis("professional-bio", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse);
-        EventDefinition sys = CreateDirectorDefinitionWithCrisis("professional-sys", EventResponseLevel.L3, CrisisSeverity.Level3, new[] { CrisisTag.SYS }, EventSource.ProfessionalCrisisResponse);
+        EventDefinition bio = CreateDirectorDefinitionWithCrisis("professional-bio", EventResponseLevel.L3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse);
+        EventDefinition sys = CreateDirectorDefinitionWithCrisis("professional-sys", EventResponseLevel.L3, new[] { CrisisTag.SYS }, EventSource.ProfessionalCrisisResponse);
         EventDirector director = CreateDirectorForLifecycle(new[] { bio, sys });
         RoundSnapshot snapshot = CreateSnapshot(roundId: 706);
         DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
-        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, (CrisisTag.BIO, CrisisSeverity.Level3), (CrisisTag.SYS, CrisisSeverity.Level3));
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, CrisisTag.BIO, CrisisTag.SYS);
 
         DirectorCycle? cycle = director.SelectCycle(CreateDirectorContext(result, assessment));
 
@@ -2452,7 +2416,6 @@ internal static class Program
             source,
             level,
             Array.Empty<CrisisTag>(),
-            CrisisSeverity.Inactive,
             TierPersonnelPlan.Uniform(4),
             TierPersonnelPlan.Uniform(1),
             isEnabled: true,
@@ -2470,7 +2433,6 @@ internal static class Program
             source,
             EventResponseLevel.L0,
             Array.Empty<CrisisTag>(),
-            CrisisSeverity.Inactive,
             TierPersonnelPlan.Uniform(6),
             TierPersonnelPlan.Uniform(1),
             isEnabled: true,
@@ -3358,6 +3320,46 @@ internal static class Program
         ResponseBreakdown noAvailableWave = CalculateBreakdown(CreateSnapshot(
             majorWaveHistory: new[] { zeroStartingWave }));
         AssertNear(0d, noAvailableWave.ReinforcementFailure, "无有效起始人数波次应视为不可用");
+    }
+
+    private static void ChaosWaveDoesNotCountAsFoundationFailure()
+    {
+        MajorWaveSnapshot chaosWave = CreateWave(
+            startingCount: 6,
+            survivingCount: 0,
+            isEvaluationComplete: true,
+            baseFailureScore: 0d,
+            faction: "ChaosWave");
+        ResponseBreakdown breakdown = CalculateBreakdown(CreateSnapshot(
+            majorWaveHistory: new[] { chaosWave }));
+        AssertNear(0d, breakdown.ReinforcementFailure, "Chaos 波次不得贡献 Foundation Reinforcement Failure");
+
+        ConCrisisDetector detector = new ConCrisisDetector();
+        RoundSnapshot snapshot = CreateSnapshot(majorWaveHistory: new[]
+        {
+            CreateWave(6, 6, true, 0d, faction: "NtfWave"),
+            chaosWave,
+        });
+        DlrcEvaluationResult result = CreateResult(snapshot);
+        CrisisState state = new CrisisState();
+        detector.Detect(snapshot, result, state, new CrisisContext());
+        AssertTrue(!state.ContainmentBaselineEquivalent.HasValue, "Chaos 波次不得建立 CON Foundation baseline");
+    }
+
+    private static void DirectorRollbackReleasesBusyState()
+    {
+        EventDirector director = CreateDirectorForLifecycle(
+            CreateDirectorDefinition("rollback-release", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L2, 1));
+        DirectorCycle cycle = SelectDirectorCycle(director, 901, Utc(22, 0));
+
+        AssertTrue(director.Advance(EventLifecycleState.Prepared, false), "Prepare 失败必须进入 Failed");
+        AssertTrue(director.Advance(EventLifecycleState.RolledBack, true), "失败周期必须允许回滚");
+        AssertTrue(!director.IsBusy, "Rollback 后必须释放 IsBusy");
+        AssertTrue(director.CurrentCycle is null, "Rollback 后必须释放 CurrentCycle");
+        AssertTrue(director.SelectCycle(CreateDirectorContext(
+            CreateCrisisResult(CreateSnapshot(roundId: 902), 3, FoundationStrength.STRONG),
+            null)) is not null, "Rollback 后下一周期必须可以创建");
+        _ = cycle;
     }
 
     private static void ReinforcementFailureAddsConsecutiveFailureBonus()
@@ -4407,11 +4409,12 @@ internal static class Program
         DateTime? evaluatedAt = null,
         bool? isCatastrophic = null,
         DateTime? completedAt = null,
-        double? scpCombatEquivalentAtCompletion = null)
+        double? scpCombatEquivalentAtCompletion = null,
+        string faction = "NTF")
     {
         DateTime start = startedAt ?? new DateTime(2026, 8, 23, 12, 0, 0, DateTimeKind.Utc);
         return new MajorWaveSnapshot(
-            name: "NTF",
+            name: faction,
             startingCount: startingCount,
             survivingCountAtEvaluation: survivingCount,
             isEvaluationComplete: isEvaluationComplete,
@@ -4420,7 +4423,8 @@ internal static class Program
             startedAt: start,
             evaluatedAt: evaluatedAt,
             completedAt: completedAt,
-            scpCombatEquivalentAtCompletion: scpCombatEquivalentAtCompletion ?? startingCount);
+            scpCombatEquivalentAtCompletion: scpCombatEquivalentAtCompletion ?? startingCount,
+            faction: faction);
     }
 
     private static void AssertReadOnly<T>(IReadOnlyList<T> values, string message)

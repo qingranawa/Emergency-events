@@ -287,7 +287,7 @@ public static class ResponseScoreCalculator
         List<MajorWaveSnapshot> completedWaves = new List<MajorWaveSnapshot>();
         foreach (MajorWaveSnapshot wave in snapshot.MajorWaveHistory)
         {
-            if (wave.IsEvaluationComplete && wave.StartingCount > 0)
+            if (wave.IsEvaluationComplete && wave.StartingCount > 0 && IsFoundationWave(wave))
             {
                 completedWaves.Add(wave);
             }
@@ -301,6 +301,13 @@ public static class ResponseScoreCalculator
         }
 
         return completedWaves;
+    }
+
+    private static bool IsFoundationWave(MajorWaveSnapshot wave)
+    {
+        return string.Equals(wave.Faction, "NtfWave", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(wave.Faction, "NTF", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(wave.Faction, "MTF", StringComparison.OrdinalIgnoreCase);
     }
 
     private static DateTime GetWaveSortTime(MajorWaveSnapshot wave)

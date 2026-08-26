@@ -18,7 +18,9 @@ public sealed class CrisisAssessment
         DlrcEvaluationTrigger trigger,
         RoundSnapshot snapshot,
         DlrcEvaluationResult result,
-        IEnumerable<CrisisDetectionResult>? detectionResults)
+        IEnumerable<CrisisDetectionResult>? detectionResults,
+        IReadOnlyDictionary<CrisisTag, long>? episodeIds = null,
+        CrisisAssessment? previous = null)
     {
         Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         Result = result ?? throw new ArgumentNullException(nameof(result));
@@ -43,6 +45,24 @@ public sealed class CrisisAssessment
                 .OrderBy(detection => detection.Tag)
                 .Select(detection => detection.Tag)
                 .ToArray());
+        List<CrisisTag> activated = ActiveTags
+            .Where(tag => previous is null || !previous.IsActive(tag))
+            .ToList();
+        List<CrisisTag> resolved = (previous?.ActiveTags ?? Array.Empty<CrisisTag>())
+            .Where(tag => !IsActive(tag))
+            .ToList();
+        ActivatedTags = activated.AsReadOnly();
+        ResolvedTags = resolved.AsReadOnly();
+        Dictionary<CrisisTag, long> copiedEpisodeIds = new Dictionary<CrisisTag, long>();
+        if (episodeIds is not null)
+        {
+            foreach (KeyValuePair<CrisisTag, long> episode in episodeIds)
+            {
+                copiedEpisodeIds[episode.Key] = episode.Value;
+            }
+        }
+
+        EpisodeIds = new ReadOnlyDictionary<CrisisTag, long>(copiedEpisodeIds);
         Code = ActiveTags.Count == 0
             ? result.Code
             : $"{result.Code}-{string.Join("+", ActiveTags)}";
@@ -60,6 +80,12 @@ public sealed class CrisisAssessment
 
     public IReadOnlyList<CrisisTag> ActiveTags { get; }
 
+    public IReadOnlyList<CrisisTag> ActivatedTags { get; }
+
+    public IReadOnlyList<CrisisTag> ResolvedTags { get; }
+
+    public IReadOnlyDictionary<CrisisTag, long> EpisodeIds { get; }
+
     public string Code { get; }
 
     public bool IsActive(CrisisTag tag)
@@ -67,10 +93,8 @@ public sealed class CrisisAssessment
         return detections.TryGetValue(tag, out CrisisDetectionResult? detection) && detection.IsActive;
     }
 
-    public CrisisSeverity GetSeverity(CrisisTag tag)
+    public bool TryGetEpisodeId(CrisisTag tag, out long episodeId)
     {
-        return detections.TryGetValue(tag, out CrisisDetectionResult? detection)
-            ? detection.Severity
-            : CrisisSeverity.Inactive;
+        return EpisodeIds.TryGetValue(tag, out episodeId);
     }
 }

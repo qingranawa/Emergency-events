@@ -5,7 +5,7 @@ using EmergencyEvents.Crisis;
 namespace EmergencyEvents.Director;
 
 /// <summary>
-/// 追踪每个危机标签在当前回合的 Episode 与已提交 Severity。
+/// 追踪每个危机标签在当前回合的 Episode 与已提交 D-LRC 响应等级。
 /// </summary>
 public sealed class ProfessionalResponseTracker
 {
@@ -23,7 +23,7 @@ public sealed class ProfessionalResponseTracker
 
         foreach (CrisisTag tag in Enum.GetValues(typeof(CrisisTag)))
         {
-            bool isActive = assessment.IsActive(tag) && assessment.GetSeverity(tag) > CrisisSeverity.Inactive;
+            bool isActive = assessment.IsActive(tag);
             if (!states.TryGetValue(tag, out EpisodeState? state))
             {
                 state = new EpisodeState();
@@ -34,38 +34,32 @@ public sealed class ProfessionalResponseTracker
             {
                 state.IsActive = true;
                 state.EpisodeId = ++nextEpisodeId;
-                state.ConsumedSeverities.Clear();
+                state.RespondedResponseLevels.Clear();
                 EpisodeId = state.EpisodeId;
-            }
-            if (isActive)
-            {
-                state.CurrentSeverity = assessment.GetSeverity(tag);
             }
             else if (!isActive && state.IsActive)
             {
                 state.IsActive = false;
-                state.ConsumedSeverities.Clear();
+                state.RespondedResponseLevels.Clear();
             }
         }
     }
 
-    public bool CanConsume(CrisisTag tag, CrisisSeverity severity)
+    public bool CanConsume(CrisisTag tag, EventResponseLevel responseLevel)
     {
-        return severity >= CrisisSeverity.Level3
-            && states.TryGetValue(tag, out EpisodeState? state)
+        return states.TryGetValue(tag, out EpisodeState? state)
             && state.IsActive
-            && state.CurrentSeverity >= severity
-            && !state.ConsumedSeverities.Contains(severity);
+            && !state.RespondedResponseLevels.Contains(responseLevel);
     }
 
-    public bool Consume(CrisisTag tag, CrisisSeverity severity, string cycleId)
+    public bool Consume(CrisisTag tag, EventResponseLevel responseLevel, string cycleId)
     {
-        if (string.IsNullOrWhiteSpace(cycleId) || !CanConsume(tag, severity))
+        if (string.IsNullOrWhiteSpace(cycleId) || !CanConsume(tag, responseLevel))
         {
             return false;
         }
 
-        states[tag].ConsumedSeverities.Add(severity);
+        states[tag].RespondedResponseLevels.Add(responseLevel);
         return true;
     }
 
@@ -82,8 +76,6 @@ public sealed class ProfessionalResponseTracker
 
         public long EpisodeId { get; set; }
 
-        public CrisisSeverity CurrentSeverity { get; set; }
-
-        public HashSet<CrisisSeverity> ConsumedSeverities { get; } = new HashSet<CrisisSeverity>();
+        public HashSet<EventResponseLevel> RespondedResponseLevels { get; } = new HashSet<EventResponseLevel>();
     }
 }

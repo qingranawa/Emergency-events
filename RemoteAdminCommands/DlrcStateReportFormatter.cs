@@ -57,7 +57,7 @@ public static class DlrcStateReportFormatter
                 continue;
             }
 
-            builder.Append($"{tag}=Active:{detection.IsActive};Severity={(int)detection.Severity};Reason={detection.Reason};Metrics=");
+            builder.Append($"{tag}=Active:{detection.IsActive};Reason={detection.Reason};Metrics=");
             AppendMetrics(builder, detection.Metrics);
             builder.AppendLine();
         }

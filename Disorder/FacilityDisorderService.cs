@@ -10,9 +10,11 @@ namespace EmergencyEvents.Disorder;
 /// </summary>
 public sealed class FacilityDisorderService
 {
+    private const int RecordedEventIdCapacity = 2048;
     private readonly FacilityDisorderConfig config;
     private readonly List<DisorderEvent> events = new List<DisorderEvent>();
     private readonly HashSet<string> eventIds = new HashSet<string>(StringComparer.Ordinal);
+    private readonly Queue<string> recordedEventIdOrder = new Queue<string>();
     private readonly List<FacilityDisorderSettlement> settlementHistory = new List<FacilityDisorderSettlement>();
     private DateTime? failedInitialEvaluationAt;
 
@@ -57,9 +59,16 @@ public sealed class FacilityDisorderService
 
     public bool Record(DisorderEvent disorderEvent)
     {
-        if (!State.IsActive || disorderEvent is null || disorderEvent.IsDryRun || !eventIds.Add(disorderEvent.EventId))
+        if (!State.IsActive || disorderEvent is null || disorderEvent.IsDryRun || recordedEventIdOrder.Contains(disorderEvent.EventId))
         {
             return false;
+        }
+
+        recordedEventIdOrder.Enqueue(disorderEvent.EventId);
+        eventIds.Add(disorderEvent.EventId);
+        while (recordedEventIdOrder.Count > RecordedEventIdCapacity)
+        {
+            eventIds.Remove(recordedEventIdOrder.Dequeue());
         }
 
         events.Add(disorderEvent);
@@ -139,6 +148,7 @@ public sealed class FacilityDisorderService
     {
         events.Clear();
         eventIds.Clear();
+        recordedEventIdOrder.Clear();
         settlementHistory.Clear();
         failedInitialEvaluationAt = null;
         State.Reset();

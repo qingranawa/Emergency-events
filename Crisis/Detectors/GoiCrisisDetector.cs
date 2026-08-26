@@ -19,7 +19,6 @@ public sealed class GoiCrisisDetector : ICrisisDetector
         return new CrisisDetectionResult(
             CrisisTag.GOI,
             isActive,
-            isActive ? CrisisSeverity.Level3 : CrisisSeverity.Inactive,
             isActive
                 ? "Registered hostile third party with Foundation disadvantaged"
                 : "GOI activation prerequisites not met",

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace EmergencyEvents.Director;
 
@@ -7,14 +8,17 @@ namespace EmergencyEvents.Director;
 /// </summary>
 public sealed class DirectorCycle
 {
-    public DirectorCycle(long cycleId, DateTime scheduledAt)
+    public DirectorCycle(long cycleId, DateTime scheduledAt, long roundId = 0L)
     {
         CycleId = cycleId;
+        RoundId = roundId;
         ScheduledAt = scheduledAt;
         State = EventLifecycleState.Scheduled;
     }
 
     public long CycleId { get; }
+
+    public long RoundId { get; }
 
     public DateTime ScheduledAt { get; }
 
@@ -23,6 +27,12 @@ public sealed class DirectorCycle
     public EventCandidate? SelectedSupport { get; internal set; }
 
     public EventCandidate? SelectedNonSupport { get; internal set; }
+
+    public IReadOnlyList<EventCandidate> O4SelectionCandidates { get; internal set; } = Array.Empty<EventCandidate>();
+
+    public string? PendingO4SelectionSessionId { get; internal set; }
+
+    public bool IsAwaitingO4Selection => !string.IsNullOrWhiteSpace(PendingO4SelectionSessionId);
 
     public DateTime? ActualFirstSlotStartedAt { get; internal set; }
 

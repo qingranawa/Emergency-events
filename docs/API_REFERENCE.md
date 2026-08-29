@@ -1,6 +1,6 @@
 # API Reference
 
-以下名称和字段以 commit `679c5c9` 的源码为准。文档不是对源码的复制，具体行为以接口和测试为准。
+以下名称和字段以当前源码为准。文档不是对源码的复制，具体行为以接口和测试为准。
 
 ## 三个事件资格维度
 
@@ -132,8 +132,26 @@ Primary cap 是上限，不是目标：E=6、D=6、C=8、B=14、A=18。实际人
 
 `SupportSourceArbitrator` 只接收合法普通 SUPPORT 候选；专业响应在 `EventSelectionService` 中优先处理。普通来源权重经过有限正数检查，Random 可通过 `IRandomSource` 注入，`SeededRandomSource` 可复现；容器遍历顺序不会决定随机结果。
 
+## M06 API
+
+### `O4PanelConfig`
+
+配置 M06 启用状态、普通 Hint、选择功能、刷新/Hint 时长、投票时长、显示字段与最近选择结果容量。`RefreshIntervalSeconds` 限制为 0.5–5，`HintDurationSeconds` 限制为 0.5–5，`VoteDurationSeconds` 限制为 5–120，`MaxCandidates` 限制为 1–2，`HistoryCapacity` 最大 256。EXILED 9.14.2 没有可验证的 Hint anchor API，因此不存在伪造的位置字段。
+
+### `IO4EventSelector` 与 `O4SelectionRequest`
+
+M05 唯一通过 `IO4EventSelector` 请求、取消 O4 会话。`O4SelectionRequest` 绑定 RoundId、CycleId、SessionId、由 M05 提供的 candidate views 和 M05 fallback ID；M06 不接受候选之外的 event ID。
+
+### `O4SelectionResult`
+
+结果包含同一组 RoundId/CycleId/SessionId、Outcome、SelectedEventId、Reason 和匿名投票统计。`EXPLICIT_WINNER` 只有在多数有效票选择当前 shortlist 内候选时出现；`FALLBACK` 保留 M05 原候选；`CANCELLED` 由生命周期清理产生。M05 必须通过 `MatchesBinding(...)` 拒绝 stale 结果。
+
+### `O4PanelRuntimeService`
+
+运行时服务使用 `Player.ShowHint(string, float)` 向当前在线 Spectator/Overwatch 写 Hint，使用 MEC 管理刷新和投票超时。客户端命令为 `o4vote <1|2>`（别名 `eevote`），由 `ClientCommandHandler` 接收；RA 不提供投票命令。`ee o4 status` 是只读管理诊断。
+
 ## Runtime Provider
 
-`IFacilityStateProvider.GetState(RoundSnapshot)` 是 Facility 状态入口。当前 `SnapshotFacilityStateProvider` 可靠使用 `WarheadDetonated` 映射 `FacilityState.Destroyed`，其余状态仍为 `PROVISIONAL`。`HasO4Selector=false` 在 M06 未实现时是合法状态，M05 必须使用 fallback。
+`IFacilityStateProvider.GetState(RoundSnapshot)` 是 Facility 状态入口。当前 `SnapshotFacilityStateProvider` 可靠使用 `WarheadDetonated` 映射 `FacilityState.Destroyed`，其余状态仍为 `PROVISIONAL`。`HasO4Selector=false` 在 M06 被禁用、无合法 O4、低人口暂停或运行时不可用时是合法状态，M05 必须使用 fallback。
 
 `IRecentEventHistory` 只定义由上游提供的只读最近事件列表，不在 M05 内部维护事件历史。`EventDirector.Logs` 才是 Director 自己拥有的诊断历史，容量由 `EventDirectorConfig.MaxLogEntries` 控制，默认 256 条。

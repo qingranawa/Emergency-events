@@ -1,6 +1,6 @@
 # Emergency Events 开发文档
 
-这套文档描述 `main` 当前稳定基线（commit `679c5c9`）的真实架构、公开契约和扩展边界。它面向维护者、未来的 Coding Agent 和 Event Pack 开发者，不是玩家宣传页。
+这套文档描述当前工作树中的 Emergency Events 真实架构、公开契约和扩展边界。它面向维护者、未来的 Coding Agent 和 Event Pack 开发者，不是玩家宣传页。
 
 ## 模块状态
 
@@ -12,7 +12,7 @@
 | M04 — Crisis System | READY | Active/Inactive 危机与 Episode 模型。 |
 | M04.5 — Facility Disorder | LOGIC READY / BALANCE PENDING | FDI 结算和去重已实现，秩序恢复策略仍待设计。 |
 | M05 — Event Director | FRAMEWORK READY / PRODUCTION EVENT PACK NOT STARTED | Director、资格判断和运行时安全边界已实现，正式事件未注册。 |
-| M06 — O4 Panel | DEFERRED BY DESIGN | 当前不实现 UI、投票或 O4 选择器。 |
+| M06 — O4 Panel | CORE IMPLEMENTED / LIVE VALIDATION PENDING | 单 Hint 面板、真实客户端投票命令、M05 shortlist 边界和生命周期清理。 |
 
 ## 阅读顺序
 
@@ -31,3 +31,5 @@
 4. M05 只消费 M01–M04.5 已发布事实，不重复计算上游状态。
 5. Event Pack 负责执行，不能自行重算 D-LRC、Crisis、Population Tier、FDI 或资格。
 6. 任何 provisional 行为都必须继续保持显式标记，不能写成已完成的正式规则。
+
+M06 的详细边界、客户端命令和真人验证限制见 [O4 Panel](O4_PANEL.md)。

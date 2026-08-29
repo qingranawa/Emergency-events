@@ -11,8 +11,8 @@ Round Start
   -> M04 Crisis Assessment
   -> M04.5 Facility Disorder Index
   -> M05 Event Director
+  -> M06 O4 Panel / Human Selection Layer
   -> Future Event Pack execution
-  -> M06 O4 Panel (DEFERRED BY DESIGN)
 ```
 
 模块之间通过已完成的快照、事件和只读上下文传递事实。下游可以消费上游结果，但不得用另一套算法重新推导同一事实。
@@ -93,8 +93,16 @@ Round Start
 
 **NON_SUPPORT**：不读取 FDI，不参与普通 SUPPORT 来源抽取。
 
-**Must not do**：不重算上游状态，不实现 Event Pack 的枪械/装备/职业执行，不要求 M06 当前存在。
+**Must not do**：不重算上游状态，不实现 Event Pack 的枪械/装备/职业执行；M06 不可用时保留 M05 fallback。
 
 ## M06 — O4 Panel
 
-状态为 `DEFERRED BY DESIGN`。当前 M05 只保留 Foundation 多候选时的 O4SelectionRequired 边界和无 O4 时的确定性回退，不实现 HUD、Panel、投票、玩家资格或 Observer UX。
+**Purpose**：向在线 Spectator/Overwatch 展示单 Hint 状态面板，并仅对 M05 已经确定的 Foundation 多候选普通 SUPPORT shortlist 提供二选一人类选择层。
+
+**Inputs**：已完成的 D-LRC、CrisisAssessment、FDI band、M03 下一次排程时间，以及 M05 已排序、已合法化的两个候选和 fallback。
+
+**Outputs**：只读 Hint、绑定 RoundId/CycleId/SessionId 的 `O4SelectionResult`、有界会话历史和只读 `ee o4 status`。
+
+**Must not do**：不生成/排序候选，不选择来源，不直接召唤或阻止 Chaos/GOI，不消费专业响应，不改变 M03 PERIODIC、M05 cadence 或 Event #2。无 O4、零票、平票、取消或失效时返回 M05 fallback。
+
+详细接口与运行时限制见 [O4 Panel](O4_PANEL.md)。

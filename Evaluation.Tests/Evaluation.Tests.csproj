@@ -24,5 +24,11 @@
     <Compile Include="..\RemoteAdminCommands\*.cs" Exclude="..\RemoteAdminCommands\EmergencyEventsCommand.cs" Link="RemoteAdminCommands\%(Filename)%(Extension)" />
     <Compile Include="..\Evaluation\*.cs" Exclude="..\Evaluation\SnapshotCollector.cs;..\Evaluation\DlrcEvaluatorService.cs" Link="Evaluation\%(Filename)%(Extension)" />
     <Compile Include="..\Director\**\*.cs" Link="Director\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\O4\O4PanelConfig.cs" Link="O4\O4PanelConfig.cs" />
+    <Compile Include="..\O4\O4PanelModels.cs" Link="O4\O4PanelModels.cs" />
+    <Compile Include="..\O4\O4SelectionResult.cs" Link="O4\O4SelectionResult.cs" />
+    <Compile Include="..\O4\O4VoteSession.cs" Link="O4\O4VoteSession.cs" />
+    <Compile Include="..\O4\O4VoteService.cs" Link="O4\O4VoteService.cs" />
+    <Compile Include="..\O4\O4PanelRenderer.cs" Link="O4\O4PanelRenderer.cs" />
   </ItemGroup>
 </Project>

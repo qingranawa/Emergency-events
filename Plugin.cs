@@ -16,6 +16,7 @@ using EmergencyEvents.RoundCore;
 using EmergencyEvents.Runtime;
 using MEC;
 using EmergencyEvents.Telemetry;
+using EmergencyEvents.O4;
 
 namespace EmergencyEvents;
 
@@ -30,6 +31,7 @@ public sealed partial class Plugin : Plugin<Config>
     private CrisisManager? crisisManager;
     private FacilityDisorderRuntimeManager? facilityDisorderManager;
     private EventDirectorRuntimeManager? eventDirectorManager;
+    private O4PanelRuntimeService? o4PanelService;
     private BalanceTelemetryService? balanceTelemetryService;
     private PluginRuntimeCoordinator? runtimeCoordinator;
     private readonly IFacilityStateProvider facilityStateProvider = new SnapshotFacilityStateProvider();
@@ -60,6 +62,8 @@ public sealed partial class Plugin : Plugin<Config>
     public FacilityDisorderRuntimeManager? FacilityDisorder => facilityDisorderManager;
 
     public EventDirectorRuntimeManager? EventDirector => eventDirectorManager;
+
+    public O4PanelRuntimeService? O4Panel => o4PanelService;
 
     public BalanceTelemetryService? BalanceTelemetry => balanceTelemetryService;
 
@@ -115,8 +119,9 @@ public sealed partial class Plugin : Plugin<Config>
             crisisManager.CrisisChanged += OnCrisisChanged;
         }
         facilityDisorderManager = new FacilityDisorderRuntimeManager(Config.FacilityDisorder);
+        o4PanelService = new O4PanelRuntimeService(Config.O4Panel);
         eventDirectorManager = new EventDirectorRuntimeManager(
-            new EventDirector(Array.Empty<EventDefinition>(), Config.EventDirector),
+            new EventDirector(Array.Empty<EventDefinition>(), Config.EventDirector, o4Selector: o4PanelService),
             Config.MinimumPlayers);
         balanceTelemetryService = new BalanceTelemetryService(Config.BalanceTelemetry, Path.Combine(Paths.Plugins, "EmergencyEvents", "telemetry"));
         reinforcementManager.MajorWaveCompleted += OnMajorWaveCompleted;
@@ -161,6 +166,7 @@ public sealed partial class Plugin : Plugin<Config>
         dlrcEvaluatorService?.CleanupRound("OnDisabled");
         CompleteBalanceTelemetryRound();
         facilityDisorderManager?.CleanupRound();
+        o4PanelService?.CleanupRound("OnDisabled");
         eventDirectorManager?.CleanupRound();
         if (dlrcEvaluatorService is not null)
         {
@@ -183,6 +189,7 @@ public sealed partial class Plugin : Plugin<Config>
         roundCoreManager?.CleanupRound();
         roundCoreManager = null;
         eventDirectorManager = null;
+        o4PanelService = null;
         balanceTelemetryService = null;
         runtimeCoordinator = null;
         if (ReferenceEquals(Instance, this))
@@ -199,6 +206,7 @@ public sealed partial class Plugin : Plugin<Config>
         CompleteBalanceTelemetryRound();
         dlrcEvaluatorService?.ResetForWaitingForPlayers();
         facilityDisorderManager?.CleanupRound();
+        o4PanelService?.CleanupRound("WaitingForPlayers");
         eventDirectorManager?.CleanupRound();
         crisisManager?.CleanupRound();
         reinforcementManager?.ResetForWaitingForPlayers();
@@ -214,6 +222,7 @@ public sealed partial class Plugin : Plugin<Config>
             () => reinforcementManager?.CleanupRound(),
             () => roundCoreManager?.CleanupRound());
         facilityDisorderManager?.CleanupRound();
+        o4PanelService?.CleanupRound("Restart");
         eventDirectorManager?.CleanupRound();
         crisisManager?.CleanupRound();
         runtimeCoordinator?.EndRound();
@@ -237,6 +246,7 @@ public sealed partial class Plugin : Plugin<Config>
         dlrcEvaluatorService?.StartRound(roundCoreManager?.State, reinforcementManager);
         facilityDisorderManager?.StartRound(DateTime.UtcNow, openingPopulation, roundId);
         balanceTelemetryService?.StartRound(roundId, DateTime.UtcNow, openingPopulation);
+        o4PanelService?.StartRound(roundId);
         eventDirectorManager?.StartRound(
             roundId,
             roundCoreManager?.State?.Resolution.Tier ?? PopulationTier.E);
@@ -264,6 +274,7 @@ public sealed partial class Plugin : Plugin<Config>
         CompleteBalanceTelemetryRound();
         dlrcEvaluatorService?.CleanupRound("RoundEnded");
         facilityDisorderManager?.CleanupRound();
+        o4PanelService?.CleanupRound("RoundEnded");
         eventDirectorManager?.CleanupRound();
         crisisManager?.CleanupRound();
         reinforcementManager?.CleanupRound();
@@ -357,6 +368,7 @@ public sealed partial class Plugin : Plugin<Config>
         dlrcEvaluatorService?.SuspendRound(reason);
         facilityDisorderManager?.ObservePopulation(runtimeCoordinator?.CurrentPopulation ?? 0);
         eventDirectorManager?.SuspendForRound(reason);
+        o4PanelService?.SuspendForRound(reason);
         Log.Info(
             $"[EmergencyEvents][Activation] RuntimeState={runtimeCoordinator?.State}; CurrentPlayers={runtimeCoordinator?.CurrentPopulation ?? 0}; MinimumPlayers={runtimeCoordinator?.MinimumPlayers ?? 0}; Decision={runtimeCoordinator?.State}; Reason={reason}");
     }
@@ -387,6 +399,11 @@ public sealed partial class Plugin : Plugin<Config>
     {
         CrisisAssessment? assessment = crisisManager?.Evaluate(completedEvent);
         facilityDisorderManager?.HandleEvaluation(completedEvent, assessment);
+        o4PanelService?.UpdateEvaluation(
+            completedEvent,
+            assessment,
+            facilityDisorderManager?.State.DisorderBand ?? FacilityDisorderBand.LOW,
+            dlrcEvaluatorService?.NextScheduledEvaluationAt);
         if (assessment is not null)
         {
             balanceTelemetryService?.RecordCrisis(assessment);
@@ -416,7 +433,7 @@ public sealed partial class Plugin : Plugin<Config>
             reinforcementManager?.GetMajorWaveRecords() ?? Array.Empty<MajorWaveRecord>(),
             CreateDirectorPersonnelFacts(completedEvent.Snapshot),
             facilityStateProvider.GetState(completedEvent.Snapshot),
-            hasO4Selector: false);
+            hasO4Selector: o4PanelService?.IsAvailable == true);
     }
 
     private void OnCrisisAssessmentUpdated(CrisisAssessment assessment)

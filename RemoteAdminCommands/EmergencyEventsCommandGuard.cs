@@ -52,6 +52,7 @@ public static class EmergencyEventsCommandGuard
             or EmergencyEventsCommandKind.DisorderEvents
             or EmergencyEventsCommandKind.DisorderHistory
             or EmergencyEventsCommandKind.DisorderExplain
+            or EmergencyEventsCommandKind.O4Status
             or EmergencyEventsCommandKind.Cleanup;
     }
 

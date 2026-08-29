@@ -40,6 +40,7 @@ public static class EmergencyEventsCommandSyntax
             "dlrc" => TryParseDlrc(values, out request),
             "crisis" => TryParseCrisis(values, out request),
             "disorder" or "fdi" => TryParseDisorder(values, out request),
+            "o4" => TryParseO4(values, out request),
             "test" => TryParseTest(values, out request),
             _ => Reject(out request),
         };
@@ -325,6 +326,17 @@ public static class EmergencyEventsCommandSyntax
         return Reject(out request);
     }
 
+    private static bool TryParseO4(string[] values, out EmergencyEventsCommandRequest request)
+    {
+        if (values.Length == 1 || (values.Length == 2 && Normalize(values[1]) == "status"))
+        {
+            request = new EmergencyEventsCommandRequest(EmergencyEventsCommandKind.O4Status);
+            return true;
+        }
+
+        return Reject(out request);
+    }
+
     private static bool Accept(EmergencyEventsCommandKind kind, out EmergencyEventsCommandRequest request)
     {
         request = new EmergencyEventsCommandRequest(kind);
@@ -358,7 +370,7 @@ public static class EmergencyEventsCommandSyntax
     private static bool IsModuleName(string value)
     {
         string normalized = Normalize(value);
-        return normalized is "round" or "roundcore" or "m01" or "reinforcement" or "wave" or "m02" or "dlrc" or "m03" or "crisis" or "m04" or "disorder" or "fdi" or "m045";
+        return normalized is "round" or "roundcore" or "m01" or "reinforcement" or "wave" or "m02" or "dlrc" or "m03" or "crisis" or "m04" or "disorder" or "fdi" or "m045" or "o4" or "m06";
     }
 
     private static bool IsCrisisTarget(string value)

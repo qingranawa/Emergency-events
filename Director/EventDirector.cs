@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using EmergencyEvents.O4;
 
 namespace EmergencyEvents.Director;
 
@@ -14,6 +15,7 @@ public sealed class EventDirector
     private readonly EventEligibilityService eligibility = new EventEligibilityService();
     private readonly EventSelectionService selection;
     private readonly IEventCostBoundary costBoundary;
+    private readonly IO4EventSelector? o4Selector;
     private readonly List<DirectorLogEntry> logs = new List<DirectorLogEntry>();
     private long nextCycleId;
 
@@ -21,7 +23,8 @@ public sealed class EventDirector
         IEnumerable<EventDefinition> definitions,
         EventDirectorConfig config,
         IEventCostBoundary? costBoundary = null,
-        IRandomSource? randomSource = null)
+        IRandomSource? randomSource = null,
+        IO4EventSelector? o4Selector = null)
     {
         this.config = (config ?? new EventDirectorConfig()).Normalize();
         registry = new EventRegistry();
@@ -33,6 +36,7 @@ public sealed class EventDirector
         Tracker = new ProfessionalResponseTracker();
         Scheduler = new EventDirectorScheduler(this.config);
         this.costBoundary = costBoundary ?? new NoOpEventCostBoundary();
+        this.o4Selector = o4Selector;
         selection = new EventSelectionService(new SupportSourceArbitrator(this.config, randomSource ?? ProductionRandomSource.Shared));
     }
 
@@ -55,7 +59,7 @@ public sealed class EventDirector
 
         IsBusy = true;
         Tracker.Observe(context.CrisisAssessment);
-        DirectorCycle cycle = new DirectorCycle(++nextCycleId, context.Timestamp)
+        DirectorCycle cycle = new DirectorCycle(++nextCycleId, context.Timestamp, context.RoundId)
         {
             State = EventLifecycleState.Evaluating,
         };
@@ -95,12 +99,25 @@ public sealed class EventDirector
         }
         cycle.State = EventLifecycleState.Selected;
         CurrentCycle = cycle;
+        if (support is not null
+            && support.O4SelectionRequired
+            && support.O4Shortlist.Count > 1
+            && o4Selector?.IsAvailable == true)
+        {
+            BeginO4Selection(context, cycle, support);
+        }
+
         return cycle;
     }
 
     public bool Advance(EventLifecycleState nextState, bool success, DateTime? at = null)
     {
         if (CurrentCycle is null)
+        {
+            return false;
+        }
+
+        if (CurrentCycle.IsAwaitingO4Selection)
         {
             return false;
         }
@@ -170,7 +187,7 @@ public sealed class EventDirector
     /// </summary>
     public bool TryStart(DirectorContext latestContext, DateTime startedAt)
     {
-        if (CurrentCycle is null || CurrentCycle.State != EventLifecycleState.Prepared)
+        if (CurrentCycle is null || CurrentCycle.State != EventLifecycleState.Prepared || CurrentCycle.IsAwaitingO4Selection)
         {
             return false;
         }
@@ -269,12 +286,134 @@ public sealed class EventDirector
 
     public void CleanupRound()
     {
+        CancelO4Selection("RoundEnd");
         IsBusy = false;
         CurrentCycle = null;
         Scheduler.Cleanup();
         Tracker.Reset();
         nextCycleId = 0L;
         logs.Clear();
+    }
+
+    private void BeginO4Selection(DirectorContext context, DirectorCycle cycle, SelectionDecision decision)
+    {
+        string sessionId = $"O4-{context.RoundId}-{cycle.CycleId}";
+        cycle.O4SelectionCandidates = decision.O4Shortlist;
+        cycle.PendingO4SelectionSessionId = sessionId;
+        O4SelectionRequest request = new O4SelectionRequest(
+            context.RoundId,
+            cycle.CycleId,
+            sessionId,
+            context.Timestamp,
+            decision.O4Shortlist.Select(O4CandidateView.From).ToArray(),
+            decision.Candidate.Definition.EventId);
+        try
+        {
+            o4Selector!.RequestSelection(request, HandleO4Selection);
+            AddLog(new DirectorLogEntry(
+                context.Timestamp,
+                cycle.CycleId,
+                decision.Candidate.Definition.EventId,
+                cycle.State,
+                true,
+                "O4_SELECTION_REQUESTED"));
+        }
+        catch (Exception exception)
+        {
+            cycle.PendingO4SelectionSessionId = null;
+            AddLog(new DirectorLogEntry(
+                context.Timestamp,
+                cycle.CycleId,
+                decision.Candidate.Definition.EventId,
+                EventLifecycleState.Selected,
+                true,
+                $"O4_SELECTION_FALLBACK:REQUEST_FAILED:{exception.GetType().Name}"));
+        }
+    }
+
+    private void HandleO4Selection(O4SelectionResult result)
+    {
+        if (CurrentCycle is null
+            || !CurrentCycle.IsAwaitingO4Selection
+            || result is null
+            || result.RoundId != CurrentCycle.RoundId
+            || !result.MatchesBinding(
+                result.RoundId,
+                CurrentCycle.CycleId,
+                CurrentCycle.PendingO4SelectionSessionId ?? string.Empty))
+        {
+            AddLog(new DirectorLogEntry(
+                result?.ResolvedAt ?? DateTime.UtcNow,
+                CurrentCycle?.CycleId ?? 0L,
+                result?.SelectedEventId ?? string.Empty,
+                EventLifecycleState.Selected,
+                false,
+                "IGNORED_STALE_SELECTION"));
+            return;
+        }
+
+        DirectorCycle cycle = CurrentCycle;
+        cycle.PendingO4SelectionSessionId = null;
+        if (result.Outcome != O4SelectionOutcome.EXPLICIT_WINNER)
+        {
+            AddLog(new DirectorLogEntry(
+                result.ResolvedAt,
+                cycle.CycleId,
+                cycle.SelectedSupport?.Definition.EventId ?? string.Empty,
+                cycle.State,
+                true,
+                $"O4_SELECTION_FALLBACK:{result.Reason}"));
+            return;
+        }
+
+        EventCandidate? selected = cycle.O4SelectionCandidates.FirstOrDefault(candidate =>
+            string.Equals(candidate.Definition.EventId, result.SelectedEventId, StringComparison.Ordinal)
+            && candidate.IsLegal);
+        if (selected is null)
+        {
+            AddLog(new DirectorLogEntry(
+                result.ResolvedAt,
+                cycle.CycleId,
+                cycle.SelectedSupport?.Definition.EventId ?? string.Empty,
+                cycle.State,
+                true,
+                "O4_SELECTION_FALLBACK:INVALIDATED"));
+            return;
+        }
+
+        cycle.SelectedSupport = selected;
+        AddLog(new DirectorLogEntry(
+            result.ResolvedAt,
+            cycle.CycleId,
+            selected.Definition.EventId,
+            cycle.State,
+            true,
+            "O4_SELECTION_RESOLVED"));
+    }
+
+    private void CancelO4Selection(string reason)
+    {
+        if (CurrentCycle?.IsAwaitingO4Selection != true || o4Selector is null)
+        {
+            return;
+        }
+
+        try
+        {
+            o4Selector.CancelAll(reason);
+        }
+        catch (Exception exception)
+        {
+            AddLog(new DirectorLogEntry(
+                DateTime.UtcNow,
+                CurrentCycle.CycleId,
+                string.Empty,
+                EventLifecycleState.Failed,
+                false,
+                $"O4_SELECTION_CANCEL_FAILED:{exception.GetType().Name}"));
+        }
+
+        CurrentCycle.PendingO4SelectionSessionId = null;
     }
 
     private EventCandidate? RevalidateCandidate(EventCandidate? candidate, DirectorContext context)
@@ -333,6 +472,7 @@ public sealed class EventDirector
 
     private void ReleaseCurrentCycle()
     {
+        CancelO4Selection("RuntimeCleanup");
         IsBusy = false;
         CurrentCycle = null;
         Scheduler.Cleanup();

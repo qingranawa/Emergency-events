@@ -17,11 +17,11 @@
 - M01：3/3。
 - M02：25/25。
 - M03：43/43。
-- M04：30/30。
-- FDI：28/28。
+- M04：32/32（其中包含 Balance Telemetry 运行观察测试）。
+- FDI：33/33（包含首次存量去重、失败恢复、Recovery 与资源边界测试）。
 - M05：46/46。
-- Total：175/175 PASS。
-- Balance Phase 2A 当前新增 7 项测试后：182/182 PASS。
+- M06：29/29。
+- Total：211/211 PASS。
 - Release Build：PASS，Warnings=0，Errors=0。
 - Isolated Runtime：PASS。
 - Live Player Validation：PENDING。
@@ -69,6 +69,7 @@ ee dlrc history [count]
 ee crisis state|list|<tag>|check <tag>
 ee disorder state|events|explain|history [count]
 ee fdi state|events|explain|history [count]
+ee o4 status
 ```
 
 `ee test ...` 只用于受权限保护的 dry-run/验证入口，不能把测试命令当作正式 Event Pack。
@@ -81,8 +82,10 @@ LocalAdmin 出现 `Command ee does not exist!` 通常表示命令发到了错误
 
 - `DIRECTOR_RUNTIME_PROBE`：验证 Scheduler/Context 解耦、显式周期、Event #2 DueAt、清理、低人口暂停、随机来源和生命周期边界。
 - `FDI_RUNTIME_PROBE`：验证事件生产、06:31 存量去重、30 秒增量、079/SYS、WAR/END 去重、无效评估恢复、长运行和清理。
+- `o4_panel_runtime_probe`：验证已加载 M06 Hint adapter 的渲染字段、紧凑状态与零 Production Definitions。
+- `o4_selection_runtime_probe`：验证合成二候选投票的多数、平票/无 O4 fallback、stale 绑定与取消清理。
 
-RuntimeHarness 默认用于隔离验证，不代表真人 Gameplay。Probe 注入的是可控事实，不能证明真实 SCP 玩家击杀真实 MTF 时 EXILED death hook 一定会生成相同 DisorderEvent。
+RuntimeHarness 默认用于隔离验证，不代表真人 Gameplay。Probe 注入的是可控事实，不能证明真实 SCP 玩家击杀真实 MTF 时 EXILED death hook 一定会生成相同 DisorderEvent；同样不能证明真实客户端一定会看到 Hint 或能输入 `o4vote`。
 
 ## 新增测试要求
 

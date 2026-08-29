@@ -53,6 +53,11 @@ public sealed class DlrcEvaluatorService
 
     public bool HasScheduledEvaluation => hasScheduledHandle;
 
+    /// <summary>
+    /// 当前正式 D-LRC 调度计算出的下一次评估时间，只读提供给展示层。
+    /// </summary>
+    public DateTime? NextScheduledEvaluationAt { get; private set; }
+
     public bool HasQueuedManualEvaluation => queuedManualEvaluation;
 
     public DlrcEvaluationTrigger? LastTrigger { get; private set; }
@@ -96,6 +101,7 @@ public sealed class DlrcEvaluatorService
         isEvaluating = false;
         queuedManualEvaluation = false;
         isActive = true;
+        NextScheduledEvaluationAt = null;
 
         double delaySeconds = EvaluationSchedule.GetInitialDelaySeconds(
             Round.ElapsedTime,
@@ -336,6 +342,7 @@ public sealed class DlrcEvaluatorService
 
         float delay = (float)Math.Max(0.01d, delaySeconds);
         hasScheduledHandle = true;
+        NextScheduledEvaluationAt = DateTime.UtcNow.AddSeconds(delaySeconds);
         scheduledHandle = Timing.CallDelayed(
             delay,
             () => RunScheduledEvaluation(currentRoundId));
@@ -349,6 +356,7 @@ public sealed class DlrcEvaluatorService
         }
 
         hasScheduledHandle = false;
+        NextScheduledEvaluationAt = null;
 
         if (!EvaluationSchedule.IsDue(Round.ElapsedTime, options.EvaluationStartTimeSeconds))
         {
@@ -467,6 +475,14 @@ public sealed class DlrcEvaluatorService
         evaluationHistory.Add(result);
         lastResult = result;
         LastTrigger = trigger;
+        if (trigger == DlrcEvaluationTrigger.PERIODIC)
+        {
+            double nextDelaySeconds = EvaluationSchedule.GetNextDelaySeconds(
+                elapsed,
+                options.EvaluationStartTimeSeconds,
+                options.EvaluationIntervalSeconds);
+            NextScheduledEvaluationAt = timestamp.AddSeconds(nextDelaySeconds);
+        }
         LogDebug(roundId, "EvaluationDetail", EvaluationLogFormatter.FormatSnapshot(snapshot));
         LogDebug(roundId, "EvaluationDetail", EvaluationLogFormatter.FormatDetailed(result, roundId));
         if (previous is null
@@ -534,12 +550,14 @@ public sealed class DlrcEvaluatorService
         {
             Timing.KillCoroutines(scheduledHandle);
             hasScheduledHandle = false;
+            NextScheduledEvaluationAt = null;
             return true;
         }
         catch (Exception exception)
         {
             LogError(roundId, "CleanupHandleFailed", exception);
             hasScheduledHandle = false;
+            NextScheduledEvaluationAt = null;
             return false;
         }
     }

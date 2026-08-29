@@ -41,6 +41,7 @@ public enum EmergencyEventsCommandKind
     DisorderEvents,
     DisorderHistory,
     DisorderExplain,
+    O4Status,
     TestCrisisAll,
     TestCrisisCheck,
     TestCrisisBioZombies,

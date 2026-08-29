@@ -5,6 +5,7 @@ using EmergencyEvents.Director;
 using EmergencyEvents.Disorder;
 using EmergencyEvents.Reinforcement;
 using EmergencyEvents.Telemetry;
+using EmergencyEvents.O4;
 using Exiled.API.Interfaces;
 
 namespace EmergencyEvents;
@@ -109,6 +110,9 @@ public sealed class Config : IConfig
 
     [Description("Module 05 Event Director 配置。Phase 1 默认关闭生产事件，只保留框架与测试入口。")]
     public EventDirectorConfig EventDirector { get; set; } = new EventDirectorConfig();
+
+    [Description("Module 06 O4 指挥面板配置。仅向在线 Spectator/Overwatch 显示，不创建事件。")]
+    public O4PanelConfig O4Panel { get; set; } = new O4PanelConfig();
 
     [Description("BIO 危机 E 档的 049-2 激活阈值。")]
     public CrisisTierThresholds CrisisBioThresholdsE { get; set; } = new CrisisTierThresholds(3);

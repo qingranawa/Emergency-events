@@ -8,6 +8,7 @@ using EmergencyEvents.Director;
 using EmergencyEvents.Director.TestEvents;
 using EmergencyEvents.Disorder;
 using EmergencyEvents.Evaluation;
+using EmergencyEvents.O4;
 using EmergencyEvents.RemoteAdminCommands;
 using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RoundCore;
@@ -201,9 +202,38 @@ internal static class Program
              ("M05 DueAt 取消后永不迟到执行", DirectorDueAtCancellationIsIrreversible),
              ("M05 第二槽位到期只执行一次", DirectorSecondSlotExecutesOnlyOnce),
              ("M05 来源仲裁 Seed 可重复", DirectorSeededSourceSelectionIsReproducible),
-            ("M05 来源权重非法值安全回退", DirectorInvalidSourceWeightsUseStableFallback),
-            ("M04/M03 Chaos 波次不应计入 Foundation 收容失败", ChaosWaveDoesNotCountAsFoundationFailure),
-            ("M05 Rollback 后必须释放忙状态", DirectorRollbackReleasesBusyState),
+             ("M05 来源权重非法值安全回退", DirectorInvalidSourceWeightsUseStableFallback),
+             ("M04/M03 Chaos 波次不应计入 Foundation 收容失败", ChaosWaveDoesNotCountAsFoundationFailure),
+             ("M05 Rollback 后必须释放忙状态", DirectorRollbackReleasesBusyState),
+            ("M06 配置值被安全限制且不伪造 Anchor", M06ConfigSanitizesValues),
+            ("M06 只允许在线 Spectator/Overwatch", M06EligibilityUsesRoleAndConnection),
+            ("M06 普通面板读取官方 D-LRC 事实", M06NormalPanelUsesOfficialFacts),
+            ("M06 无危机和 FDI 三档展示正确", M06NormalPanelUsesCrisisAndFdiMapping),
+            ("M06 面板显示开关实际生效", M06PanelDisplayOptionsAreHonored),
+            ("M06 面板隐藏原始分数和危机 Severity", M06PanelHidesInternalScoreAndSeverity),
+            ("M06 选择面板只展示 M05 候选字段", M06SelectionPanelUsesCandidateFields),
+            ("M06 Vote Session 绑定回合周期和会话", M06VoteSessionBindsRuntimeIdentity),
+            ("M06 多数票选择唯一候选", M06VoteSessionResolvesMajority),
+            ("M06 平票回退 M05", M06VoteSessionTieFallsBack),
+            ("M06 零票回退 M05", M06VoteSessionNoVoteFallsBack),
+            ("M06 无 O4 立即回退且不创建会话", M06NoO4FallsBackImmediately),
+            ("M06 单一候选不创建投票", M06SingleCandidateSkipsVote),
+            ("M06 改票只保留一个投票人", M06VoteChangeKeepsOneVoter),
+            ("M06 重复投票不增加计数", M06RepeatedVoteDoesNotDuplicate),
+            ("M06 非 O4 和中途加入者不能投当前会话", M06RejectsNonO4AndNewJoiner),
+            ("M06 过期会话拒绝投票", M06ExpiredSessionRejectsVote),
+            ("M06 SelectionResult 校验回合周期会话", M06SelectionResultRejectsStaleBinding),
+            ("M06 失去资格的投票不计入最终结果", M06DisconnectedVoteIsIgnored),
+            ("M06 清理会话只产生一次取消结果", M06CleanupCancelsSessionOnce),
+            ("M06 RA 语法只提供 O4 状态查询", M06RaSyntaxRecognizesStatus),
+            ("M06 M05 多候选只请求一次 Selector", M06M05RequestsSelectorOnce),
+            ("M06 M05 清理会取消未决选择", M06M05CleanupCancelsPendingSelection),
+            ("M06 过期 Selector 结果不会污染当前周期", M06M05IgnoresStaleSelection),
+            ("M06 选择结果后 M05 仍执行最终重验证", M06M05RevalidatesAfterSelection),
+            ("M06 Selector 不可用时保留 M05 回退", M06M05PreservesFallbackWhenUnavailable),
+            ("M06 专业响应投票不提前消费", M06ProfessionalVoteDoesNotConsume),
+            ("M06 长运行会话结果保持有界", M06LongRunHistoryRemainsBounded),
+            ("M06 暂停和错误面板保持单块输出", M06SuspendedAndUnavailablePanelsAreCompact),
         };
 
         string requestedModule = args.Length == 0 ? "ALL" : args[0].ToUpperInvariant();
@@ -212,7 +242,9 @@ internal static class Program
 
         for (int index = 0; index < tests.Length; index++)
         {
-            string module = tests[index].Name.StartsWith("M05", StringComparison.Ordinal)
+            string module = tests[index].Name.StartsWith("M06", StringComparison.Ordinal)
+                ? "M06"
+                : tests[index].Name.StartsWith("M05", StringComparison.Ordinal)
                 ? "M05"
                 : tests[index].Name.StartsWith("FDI", StringComparison.Ordinal)
                 ? "FDI"
@@ -2482,6 +2514,524 @@ internal static class Program
         EventSource? selected = new SupportSourceArbitrator(config, new SeededRandomSource(9)).SelectOrdinarySource(context, new[] { foundation, chaos });
 
         AssertEqual(EventSource.Foundation, selected, "总权重为零时必须按稳定 Foundation -> Chaos -> GOI 顺序回退");
+    }
+
+    private static void M06ConfigSanitizesValues()
+    {
+        O4PanelConfig config = new O4PanelConfig
+        {
+            RefreshIntervalSeconds = 0.1d,
+            HintDurationSeconds = 8d,
+            VoteDurationSeconds = 2,
+            MaxCandidates = 8,
+            HistoryCapacity = 0,
+        }.Normalize();
+
+        AssertNear(0.5d, config.RefreshIntervalSeconds, "面板刷新间隔必须限制为至少 0.5 秒");
+        AssertNear(5d, config.HintDurationSeconds, "Hint 时长必须限制为最多 5 秒");
+        AssertEqual(5, config.VoteDurationSeconds, "投票时长必须限制为至少 5 秒");
+        AssertEqual(2, config.MaxCandidates, "M06 最大候选数必须限制为两项");
+        AssertEqual(256, config.HistoryCapacity, "M06 会话历史必须有界");
+        AssertTrue(typeof(O4PanelConfig).GetProperty("PanelVerticalOffset") is null, "EXILED Hint API 不支持时不得伪造 Anchor 配置");
+    }
+
+    private static void M06EligibilityUsesRoleAndConnection()
+    {
+        AssertTrue(O4EligibilityPolicy.IsEligible(new O4PlayerSnapshot("O4-01", true, O4RoleState.Spectator)), "在线 Spectator 必须是 O4");
+        AssertTrue(O4EligibilityPolicy.IsEligible(new O4PlayerSnapshot("O4-02", true, O4RoleState.Overwatch)), "在线 Overwatch 必须是 O4");
+        AssertTrue(!O4EligibilityPolicy.IsEligible(new O4PlayerSnapshot("O4-03", false, O4RoleState.Spectator)), "断开连接的 Spectator 不得是 O4");
+        AssertTrue(!O4EligibilityPolicy.IsEligible(new O4PlayerSnapshot("O4-04", true, O4RoleState.Alive)), "存活玩家不得是 O4");
+    }
+
+    private static void M06NormalPanelUsesOfficialFacts()
+    {
+        DateTime now = Utc(6, 31);
+        O4PanelViewModel model = new O4PanelViewModel(
+            "DLRC-C4-BIO+SYS",
+            4,
+            ControlState.UNCONTROLLED,
+            new[] { CrisisTag.BIO, CrisisTag.SYS },
+            FacilityDisorderBand.MEDIUM,
+            now,
+            now.AddSeconds(27));
+
+        string panel = new O4PanelRenderer().RenderNormal(model, now);
+
+        AssertTrue(panel.Contains("DLRC-C4-BIO+SYS", StringComparison.Ordinal), "面板必须显示官方完整 D-LRC Code");
+        AssertTrue(panel.Contains("响应 L4", StringComparison.Ordinal), "面板必须显示官方响应等级");
+        AssertTrue(panel.Contains("失控", StringComparison.Ordinal), "面板必须显示 ControlState 中文映射");
+        AssertTrue(panel.Contains("FDI 中", StringComparison.Ordinal), "面板必须显示 FDI 档位");
+        AssertTrue(panel.Contains("BIO · SYS", StringComparison.Ordinal), "面板必须显示活动危机标签");
+        AssertTrue(panel.Contains("下次评估 00:27", StringComparison.Ordinal), "面板必须显示 M03 官方下一次评估倒计时");
+    }
+
+    private static void M06NormalPanelUsesCrisisAndFdiMapping()
+    {
+        DateTime now = Utc(7, 0);
+        O4PanelRenderer renderer = new O4PanelRenderer();
+        string none = renderer.RenderNormal(new O4PanelViewModel("DLRC-E1", 1, ControlState.CONTROLLED, Array.Empty<CrisisTag>(), FacilityDisorderBand.LOW, now, null), now);
+        string medium = renderer.RenderNormal(new O4PanelViewModel("DLRC-C2", 2, ControlState.CONTROLLED, null, FacilityDisorderBand.MEDIUM, now, null), now);
+        string high = renderer.RenderNormal(new O4PanelViewModel("DLRC-A5", 5, ControlState.ADVANTAGE, null, FacilityDisorderBand.HIGH, now, null), now);
+
+        AssertTrue(none.Contains("危机 无", StringComparison.Ordinal), "无活动危机必须显示无");
+        AssertTrue(none.Contains("FDI 低", StringComparison.Ordinal), "LOW 必须映射为低");
+        AssertTrue(medium.Contains("FDI 中", StringComparison.Ordinal), "MEDIUM 必须映射为中");
+        AssertTrue(high.Contains("FDI 高", StringComparison.Ordinal), "HIGH 必须映射为高");
+        AssertTrue(high.Contains("下次评估 --", StringComparison.Ordinal), "缺少官方下一次评估时间时不得伪造倒计时");
+    }
+
+    private static void M06PanelDisplayOptionsAreHonored()
+    {
+        O4PanelConfig config = new O4PanelConfig
+        {
+            ShowFdi = false,
+            ShowCrisis = false,
+            ShowNextEvaluation = false,
+            ShowControlState = false,
+        }.Normalize();
+        O4PanelRenderer renderer = new O4PanelRenderer(config);
+        DateTime now = Utc(7, 7);
+        O4PanelViewModel model = new O4PanelViewModel(
+            "DLRC-C4-BIO",
+            4,
+            ControlState.UNCONTROLLED,
+            new[] { CrisisTag.BIO },
+            FacilityDisorderBand.HIGH,
+            now,
+            now.AddSeconds(30));
+        string normal = renderer.RenderNormal(model, now);
+        string selection = renderer.RenderSelection(model, CreateO4Request(9010, 1, "o4-options").Candidates, 20, 0, 2);
+
+        AssertTrue(normal.Contains("状态已隐藏", StringComparison.Ordinal), "关闭 FDI 与危机后普通面板必须显示隐藏状态");
+        AssertTrue(normal.Contains("下次评估 已隐藏", StringComparison.Ordinal), "关闭下次评估后普通面板必须隐藏倒计时");
+        AssertTrue(!normal.Contains("失控", StringComparison.Ordinal), "关闭控制状态后普通面板不得显示控制状态");
+        AssertTrue(!normal.Contains("FDI 高", StringComparison.Ordinal) && !normal.Contains("危机 BIO", StringComparison.Ordinal), "关闭状态字段后普通面板不得泄漏字段");
+        AssertTrue(!selection.Contains("FDI 高", StringComparison.Ordinal), "关闭 FDI 后选择面板不得显示 FDI");
+    }
+
+    private static void M06PanelHidesInternalScoreAndSeverity()
+    {
+        DateTime now = Utc(7, 1);
+        string panel = new O4PanelRenderer().RenderNormal(
+            new O4PanelViewModel("DLRC-C4-BIO+SYS", 4, ControlState.UNCONTROLLED, new[] { CrisisTag.BIO, CrisisTag.SYS }, FacilityDisorderBand.HIGH, now, null),
+            now);
+
+        AssertTrue(!panel.Contains("Response Score", StringComparison.OrdinalIgnoreCase), "面板不得显示内部 Response Score 字段");
+        AssertTrue(!panel.Contains("58/100", StringComparison.Ordinal), "面板不得显示原始分数");
+        AssertTrue(!panel.Contains("BIO L", StringComparison.Ordinal), "危机标签不得携带旧 Severity");
+        AssertTrue(!panel.Contains("SYS L", StringComparison.Ordinal), "危机标签不得携带旧 Severity");
+    }
+
+    private static void M06SelectionPanelUsesCandidateFields()
+    {
+        DateTime now = Utc(7, 2);
+        O4PanelViewModel model = new O4PanelViewModel("DLRC-C4-BIO", 4, ControlState.UNCONTROLLED, new[] { CrisisTag.BIO }, FacilityDisorderBand.HIGH, now, now.AddSeconds(30));
+        O4CandidateView[] candidates =
+        {
+            new O4CandidateView("event-alpha", "Alpha display", EventCategory.Support, EventSource.Foundation, false),
+            new O4CandidateView("event-beta", "Beta display", EventCategory.Support, EventSource.Foundation, true),
+        };
+
+        string panel = new O4PanelRenderer().RenderSelection(model, candidates, 14, 2, 5);
+
+        AssertTrue(panel.Contains("EVENT SELECTION", StringComparison.Ordinal), "选择面板必须进入事件选择模式");
+        AssertTrue(panel.Contains("Alpha display", StringComparison.Ordinal), "选择面板必须使用 EventDefinition.DisplayName");
+        AssertTrue(panel.Contains("event-beta", StringComparison.Ordinal), "选择面板必须保留 EventId 回退字段");
+        AssertTrue(panel.Contains("已投 2 / 5", StringComparison.Ordinal), "分母必须是会话开始时 O4 快照人数");
+        AssertTrue(panel.Contains("剩余 14 秒", StringComparison.Ordinal), "选择面板必须显示投票剩余时间");
+    }
+
+    private static void M06VoteSessionBindsRuntimeIdentity()
+    {
+        DateTime start = Utc(7, 3);
+        O4SelectionRequest request = CreateO4Request(901, 1, "o4-session-1");
+        O4VoteSession session = new O4VoteSession(
+            request,
+            new[] { new O4PlayerSnapshot("O4-01", true, O4RoleState.Spectator) },
+            start,
+            start.AddSeconds(20),
+            allowVoteChange: true);
+
+        AssertEqual(901L, session.RoundId, "Vote Session 必须绑定 RoundId");
+        AssertEqual(1L, session.CycleId, "Vote Session 必须绑定 Director CycleId");
+        AssertEqual("o4-session-1", session.SessionId, "Vote Session 必须绑定 SessionId");
+        AssertEqual(O4VoteSessionState.CREATED, session.State, "会话必须先处于 CREATED");
+        AssertTrue(session.TryOpen(), "合法会话必须可以打开");
+        AssertEqual(O4VoteSessionState.OPEN, session.State, "打开后会话必须处于 OPEN");
+    }
+
+    private static void M06VoteSessionResolvesMajority()
+    {
+        DateTime start = Utc(7, 4);
+        O4SelectionRequest request = CreateO4Request(902, 2, "o4-session-2");
+        O4PlayerSnapshot[] voters = CreateO4Players(5);
+        O4VoteSession session = OpenO4Session(request, voters, start);
+        CastO4Vote(session, "O4-01", 1, start.AddSeconds(1));
+        CastO4Vote(session, "O4-02", 1, start.AddSeconds(1));
+        CastO4Vote(session, "O4-03", 1, start.AddSeconds(1));
+        CastO4Vote(session, "O4-04", 2, start.AddSeconds(1));
+        CastO4Vote(session, "O4-05", 2, start.AddSeconds(1));
+
+        O4SelectionResult result = session.Resolve(start.AddSeconds(20), voters);
+
+        AssertEqual(O4SelectionOutcome.EXPLICIT_WINNER, result.Outcome, "唯一最高票必须产生显式赢家");
+        AssertEqual("event-alpha", result.SelectedEventId, "多数票必须选择候选 1");
+        AssertEqual(O4VoteSessionState.RESOLVED, session.State, "显式赢家必须结束为 RESOLVED");
+        AssertEqual(5, result.EligibleVotes, "最终计票必须包含当前仍有资格的投票");
+    }
+
+    private static void M06VoteSessionTieFallsBack()
+    {
+        DateTime start = Utc(7, 5);
+        O4SelectionRequest request = CreateO4Request(903, 3, "o4-session-3");
+        O4PlayerSnapshot[] voters = CreateO4Players(4);
+        O4VoteSession session = OpenO4Session(request, voters, start);
+        CastO4Vote(session, "O4-01", 1, start.AddSeconds(1));
+        CastO4Vote(session, "O4-02", 1, start.AddSeconds(1));
+        CastO4Vote(session, "O4-03", 2, start.AddSeconds(1));
+        CastO4Vote(session, "O4-04", 2, start.AddSeconds(1));
+
+        O4SelectionResult result = session.Resolve(start.AddSeconds(20), voters);
+
+        AssertEqual(O4SelectionOutcome.FALLBACK, result.Outcome, "平票必须回退 M05");
+        AssertEqual("TIE", result.Reason, "平票必须记录 TIE 原因");
+        AssertTrue(string.IsNullOrEmpty(result.SelectedEventId), "平票不得伪造赢家");
+        AssertEqual(O4VoteSessionState.EXPIRED, session.State, "平票超时必须结束为 EXPIRED");
+    }
+
+    private static void M06VoteSessionNoVoteFallsBack()
+    {
+        DateTime start = Utc(7, 6);
+        O4VoteSession session = OpenO4Session(CreateO4Request(904, 4, "o4-session-4"), CreateO4Players(3), start);
+        O4SelectionResult result = session.Resolve(start.AddSeconds(20), CreateO4Players(3));
+
+        AssertEqual(O4SelectionOutcome.FALLBACK, result.Outcome, "零票必须回退 M05");
+        AssertEqual("NO_VOTE", result.Reason, "零票必须记录 NO_VOTE 原因");
+    }
+
+    private static void M06NoO4FallsBackImmediately()
+    {
+        DateTime now = Utc(7, 7);
+        O4VoteService service = new O4VoteService(new O4PanelConfig());
+        bool opened = service.TryOpenSession(CreateO4Request(905, 5, "o4-session-5"), Array.Empty<O4PlayerSnapshot>(), now, out O4SelectionResult immediate);
+
+        AssertTrue(!opened, "没有 O4 时不得创建等待会话");
+        AssertEqual(O4SelectionOutcome.FALLBACK, immediate.Outcome, "没有 O4 必须立即回退 M05");
+        AssertEqual("NO_O4_AVAILABLE", immediate.Reason, "没有 O4 必须记录明确原因");
+        AssertTrue(service.ActiveSession is null, "没有 O4 时 ActiveSession 必须为空");
+    }
+
+    private static void M06SingleCandidateSkipsVote()
+    {
+        DateTime now = Utc(7, 8);
+        O4VoteService service = new O4VoteService(new O4PanelConfig());
+        bool opened = service.TryOpenSession(CreateO4Request(906, 6, "o4-session-6", 1), CreateO4Players(2), now, out O4SelectionResult immediate);
+
+        AssertTrue(!opened, "单一候选不得创建投票会话");
+        AssertEqual(O4SelectionOutcome.EXPLICIT_WINNER, immediate.Outcome, "单一候选必须直接返回");
+        AssertEqual("event-alpha", immediate.SelectedEventId, "单一候选结果必须来自 M05 shortlist");
+    }
+
+    private static void M06VoteChangeKeepsOneVoter()
+    {
+        DateTime start = Utc(7, 9);
+        O4VoteSession session = OpenO4Session(CreateO4Request(907, 7, "o4-session-7"), CreateO4Players(2), start);
+        AssertTrue(session.TryCastVote("O4-01", 1, start.AddSeconds(1), true, out bool firstChanged, out _), "首次投票必须成功");
+        AssertTrue(!firstChanged, "首次投票不是改票");
+        AssertTrue(session.TryCastVote("O4-01", 2, start.AddSeconds(2), true, out bool secondChanged, out _), "允许改票时第二次投票必须成功");
+        AssertTrue(secondChanged, "第二次投票必须标记为改票");
+        AssertEqual(1, session.VoteCount, "改票不得增加投票人数");
+        O4SelectionResult result = session.Resolve(start.AddSeconds(20), CreateO4Players(2));
+        AssertEqual("event-beta", result.SelectedEventId, "改票后的最终选择必须是候选 2");
+    }
+
+    private static void M06RepeatedVoteDoesNotDuplicate()
+    {
+        DateTime start = Utc(7, 10);
+        O4VoteSession session = OpenO4Session(CreateO4Request(908, 8, "o4-session-8"), CreateO4Players(2), start);
+        AssertTrue(session.TryCastVote("O4-01", 1, start.AddSeconds(1), true, out _, out _), "首次投票必须成功");
+        AssertTrue(session.TryCastVote("O4-01", 1, start.AddSeconds(2), true, out bool changed, out _), "重复同一选项可以安全重试");
+        AssertTrue(!changed, "重复同一选项不得算作改票");
+        AssertEqual(1, session.VoteCount, "重复同一选项不得增加投票人数");
+    }
+
+    private static void M06RejectsNonO4AndNewJoiner()
+    {
+        DateTime start = Utc(7, 11);
+        O4VoteSession session = OpenO4Session(CreateO4Request(909, 9, "o4-session-9"), CreateO4Players(1), start);
+        AssertTrue(!session.TryCastVote("alive-player", 1, start.AddSeconds(1), true, out _, out _), "非 O4 不得投票");
+        AssertTrue(!session.TryCastVote("O4-02", 1, start.AddSeconds(1), true, out _, out _), "会话开始后新加入的 O4 不得加入当前选民快照");
+        AssertTrue(!session.TryCastVote("O4-01", 1, start.AddSeconds(1), false, out _, out _), "当前失去 O4 资格的玩家不得投票");
+    }
+
+    private static void M06ExpiredSessionRejectsVote()
+    {
+        DateTime start = Utc(7, 12);
+        O4VoteSession session = OpenO4Session(CreateO4Request(910, 10, "o4-session-10"), CreateO4Players(2), start);
+        AssertTrue(!session.TryCastVote("O4-01", 1, start.AddSeconds(20), true, out _, out _), "到期时投票必须被拒绝");
+        AssertEqual(O4VoteSessionState.EXPIRED, session.State, "到期投票必须把会话置为 EXPIRED");
+    }
+
+    private static void M06SelectionResultRejectsStaleBinding()
+    {
+        O4SelectionResult result = O4SelectionResult.ExplicitWinner(911, 11, "o4-session-11", "event-alpha", Utc(7, 13));
+
+        AssertTrue(result.MatchesBinding(911, 11, "o4-session-11"), "匹配的 SelectionResult 必须通过绑定校验");
+        AssertTrue(!result.MatchesBinding(911, 12, "o4-session-11"), "错误 CycleId 必须被识别为 stale");
+        AssertTrue(!result.MatchesBinding(911, 11, "o4-session-old"), "错误 SessionId 必须被识别为 stale");
+    }
+
+    private static void M06DisconnectedVoteIsIgnored()
+    {
+        DateTime start = Utc(7, 14);
+        O4PlayerSnapshot[] initial = CreateO4Players(2);
+        O4VoteSession session = OpenO4Session(CreateO4Request(912, 12, "o4-session-12"), initial, start);
+        CastO4Vote(session, "O4-01", 1, start.AddSeconds(1));
+        CastO4Vote(session, "O4-02", 2, start.AddSeconds(1));
+        O4PlayerSnapshot[] current =
+        {
+            new O4PlayerSnapshot("O4-01", false, O4RoleState.Spectator),
+            new O4PlayerSnapshot("O4-02", true, O4RoleState.Spectator),
+        };
+
+        O4SelectionResult result = session.Resolve(start.AddSeconds(20), current);
+
+        AssertEqual("event-beta", result.SelectedEventId, "断开连接的投票不得计入最终结果");
+        AssertEqual(1, result.EligibleVotes, "最终有效投票数必须重新过滤在线资格");
+    }
+
+    private static void M06CleanupCancelsSessionOnce()
+    {
+        DateTime now = Utc(7, 15);
+        O4VoteService service = new O4VoteService(new O4PanelConfig());
+        AssertTrue(service.TryOpenSession(CreateO4Request(913, 13, "o4-session-13"), CreateO4Players(2), now, out _), "测试清理前必须建立会话");
+        O4SelectionResult? cancelled = service.CancelActive("RoundEnd", now.AddSeconds(1));
+        O4SelectionResult? repeated = service.CancelActive("RoundEnd", now.AddSeconds(2));
+
+        AssertTrue(cancelled is not null, "首次清理必须产生取消结果");
+        AssertEqual(O4SelectionOutcome.CANCELLED, cancelled!.Outcome, "清理结果必须是 CANCELLED");
+        AssertTrue(repeated is null, "重复清理不得产生第二次取消结果");
+        AssertTrue(service.ActiveSession is null, "清理后不得保留活动会话");
+        AssertEqual(1, service.RecentResults.Count, "清理后只保留一次结果记录");
+    }
+
+    private static void M06RaSyntaxRecognizesStatus()
+    {
+        AssertTrue(EmergencyEventsCommandSyntax.TryParse(new[] { "o4" }, out EmergencyEventsCommandRequest root), "ee o4 必须可解析为状态查询");
+        AssertEqual(EmergencyEventsCommandKind.O4Status, root.Kind, "ee o4 必须只返回 O4 状态查询");
+        AssertTrue(EmergencyEventsCommandSyntax.TryParse(new[] { "o4", "status" }, out EmergencyEventsCommandRequest status), "ee o4 status 必须可解析");
+        AssertEqual(EmergencyEventsCommandKind.O4Status, status.Kind, "ee o4 status 必须映射 O4Status");
+        AssertTrue(!EmergencyEventsCommandSyntax.TryParse(new[] { "o4", "vote", "1" }, out _), "RA 命令不得伪装为玩家投票通道");
+    }
+
+    private static void M06M05RequestsSelectorOnce()
+    {
+        RecordingO4Selector selector = new RecordingO4Selector(isAvailable: true);
+        EventDefinition first = CreateDirectorDefinition("m06-foundation-a", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 2);
+        EventDefinition second = CreateDirectorDefinition("m06-foundation-b", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 1);
+        EventDirector director = new EventDirector(new[] { first, second }, new EventDirectorConfig { Enabled = true }, o4Selector: selector);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 914, timestamp: Utc(7, 16));
+        DirectorCycle? cycle = director.SelectCycle(CreateDirectorContext(CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG), null, foundationAvailable: 6));
+
+        AssertTrue(cycle is not null, "Foundation 多候选必须创建 Director 周期");
+        AssertEqual(1, selector.RequestCount, "M05 对同一周期只能请求一次 O4 Selector");
+        AssertEqual(2, selector.LastRequest!.Candidates.Count, "M05 必须提供最多两个合法 shortlist 候选");
+        AssertTrue(cycle!.IsAwaitingO4Selection, "等待 O4 时 M05 必须保持明确 pending 状态");
+    }
+
+    private static void M06M05CleanupCancelsPendingSelection()
+    {
+        RecordingO4Selector selector = new RecordingO4Selector(isAvailable: true);
+        EventDefinition first = CreateDirectorDefinition("m06-cleanup-a", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 2);
+        EventDefinition second = CreateDirectorDefinition("m06-cleanup-b", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 1);
+        EventDirector director = new EventDirector(new[] { first, second }, new EventDirectorConfig { Enabled = true }, o4Selector: selector);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 9141, timestamp: Utc(7, 16));
+        DirectorCycle cycle = director.SelectCycle(CreateDirectorContext(CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG), null, foundationAvailable: 6))!;
+
+        director.CleanupRound();
+
+        AssertTrue(cycle.IsAwaitingO4Selection == false, "清理必须解除未决 O4 选择");
+        AssertEqual(1, selector.CancelCount, "M05 清理必须恰好取消一次 Selector 会话");
+        AssertTrue(!director.IsBusy && director.CurrentCycle is null, "清理不得遗留 Director busy 或周期状态");
+    }
+
+    private static void M06M05IgnoresStaleSelection()
+    {
+        RecordingO4Selector selector = new RecordingO4Selector(isAvailable: true);
+        EventDefinition first = CreateDirectorDefinition("m06-stale-a", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 2);
+        EventDefinition second = CreateDirectorDefinition("m06-stale-b", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 1);
+        EventDirector director = new EventDirector(new[] { first, second }, new EventDirectorConfig { Enabled = true }, o4Selector: selector);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 915, timestamp: Utc(7, 17));
+        DirectorCycle cycle = director.SelectCycle(CreateDirectorContext(CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG), null, foundationAvailable: 6))!;
+        O4SelectionRequest request = selector.LastRequest!;
+        selector.Complete(O4SelectionResult.ExplicitWinner(request.RoundId, request.CycleId + 1, request.SessionId, "m06-stale-b", Utc(7, 18)));
+
+        AssertTrue(cycle.IsAwaitingO4Selection, "stale 结果不得解除当前周期 pending");
+        AssertEqual("m06-stale-a", director.CurrentCycle!.SelectedSupport!.Definition.EventId, "stale 结果不得污染当前候选");
+        AssertTrue(director.Logs.Any(entry => entry.Reason.Contains("STALE", StringComparison.OrdinalIgnoreCase)), "stale 结果必须有诊断日志");
+    }
+
+    private static void M06M05RevalidatesAfterSelection()
+    {
+        RecordingO4Selector selector = new RecordingO4Selector(isAvailable: true);
+        EventDefinition first = CreateDirectorDefinition("m06-revalidate-a", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 2);
+        EventDefinition second = CreateDirectorDefinition("m06-revalidate-b", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 1);
+        EventDirector director = new EventDirector(new[] { first, second }, new EventDirectorConfig { Enabled = true }, o4Selector: selector);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 916, timestamp: Utc(7, 19));
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG);
+        DirectorCycle cycle = director.SelectCycle(CreateDirectorContext(result, null, foundationAvailable: 6))!;
+        O4SelectionRequest request = selector.LastRequest!;
+        selector.Complete(O4SelectionResult.ExplicitWinner(request.RoundId, request.CycleId, request.SessionId, "m06-revalidate-b", Utc(7, 20)));
+        AssertTrue(director.Advance(EventLifecycleState.Prepared, true), "选择结果后周期必须仍可进入 Prepared");
+
+        DirectorContext invalidContext = CreateDirectorContext(result, null, foundationAvailable: 0);
+        AssertTrue(!director.TryStart(invalidContext, Utc(7, 21)), "O4 选择后候选失效必须被 M05 最终重验证拒绝");
+        AssertEqual(EventLifecycleState.RolledBack, cycle.State, "最终重验证失败必须回滚周期");
+    }
+
+    private static void M06M05PreservesFallbackWhenUnavailable()
+    {
+        RecordingO4Selector selector = new RecordingO4Selector(isAvailable: false);
+        EventDefinition first = CreateDirectorDefinition("m06-fallback-a", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 2);
+        EventDefinition second = CreateDirectorDefinition("m06-fallback-b", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 1);
+        EventDirector director = new EventDirector(new[] { first, second }, new EventDirectorConfig { Enabled = true }, o4Selector: selector);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 917, timestamp: Utc(7, 22));
+        DirectorCycle? cycle = director.SelectCycle(CreateDirectorContext(CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG), null, foundationAvailable: 6));
+
+        AssertTrue(cycle is not null, "Selector 不可用时仍必须保留 M05 周期");
+        AssertEqual(0, selector.RequestCount, "Selector 不可用时不得请求选择");
+        AssertTrue(!cycle!.IsAwaitingO4Selection, "Selector 不可用时必须直接走 M05 fallback");
+        AssertEqual("m06-fallback-a", cycle.SelectedSupport!.Definition.EventId, "Selector 不可用时必须保留原 M05 首选");
+    }
+
+    private static void M06ProfessionalVoteDoesNotConsume()
+    {
+        EventDefinition definition = CreateDirectorDefinitionWithCrisis("m06-professional", EventResponseLevel.L3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse);
+        EventDirector director = CreateDirectorForLifecycle(definition);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 918, timestamp: Utc(7, 23));
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 3, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, CrisisTag.BIO);
+        DirectorCycle? cycle = director.SelectCycle(CreateDirectorContext(result, assessment));
+
+        AssertTrue(cycle is not null, "专业响应候选必须可以被 M05 选中");
+        AssertTrue(director.Tracker.CanConsume(CrisisTag.BIO, EventResponseLevel.L3), "M06 选择阶段不得消费专业响应资格");
+    }
+
+    private static void M06LongRunHistoryRemainsBounded()
+    {
+        O4PanelConfig config = new O4PanelConfig { HistoryCapacity = 256 }.Normalize();
+        O4VoteService service = new O4VoteService(config);
+        O4PlayerSnapshot[] voters = CreateO4Players(2);
+        DateTime start = Utc(7, 24);
+        O4PanelRenderer renderer = new O4PanelRenderer();
+        O4PanelViewModel panel = new O4PanelViewModel(
+            "DLRC-C3-BIO",
+            3,
+            ControlState.CONTROLLED,
+            new[] { CrisisTag.BIO },
+            FacilityDisorderBand.MEDIUM,
+            start,
+            start.AddSeconds(30));
+        for (int index = 0; index < 1000; index++)
+        {
+            string normal = renderer.RenderNormal(panel, start.AddSeconds(index));
+            AssertTrue(normal.Contains("DLRC-C3-BIO", StringComparison.Ordinal), "长运行普通面板必须持续可渲染");
+            O4SelectionRequest request = CreateO4Request(919, index + 1, "o4-long-" + index);
+            AssertTrue(service.TryOpenSession(request, voters, start.AddSeconds(index * 21), out _), "长运行每一轮必须只建立一个活动会话");
+            AssertTrue(service.TryCastVote(request.SessionId, "O4-01", 1, start.AddSeconds(index * 21 + 1), true, out _, out _), "长运行投票必须成功");
+            O4SelectionResult result = service.ResolveActive(start.AddSeconds(index * 21 + 20), voters)!;
+            AssertEqual(O4SelectionOutcome.EXPLICIT_WINNER, result.Outcome, "长运行每个会话必须只产生显式结果");
+        }
+
+        AssertTrue(service.ActiveSession is null, "长运行结束不得泄漏活动会话");
+        AssertEqual(256, service.RecentResults.Count, "长运行结果必须限制为最近 256 条");
+        AssertEqual("o4-long-999", service.RecentResults[255].SessionId, "有界历史必须保留最新结果");
+    }
+
+    private static void M06SuspendedAndUnavailablePanelsAreCompact()
+    {
+        O4PanelRenderer renderer = new O4PanelRenderer();
+        string suspended = renderer.RenderSuspended();
+        string unavailable = renderer.RenderUnavailable();
+
+        AssertTrue(suspended.Contains("系统已暂停", StringComparison.Ordinal), "暂停面板必须明确提示系统已暂停");
+        AssertTrue(unavailable.Contains("SYSTEM UNAVAILABLE", StringComparison.Ordinal), "错误面板必须明确提示不可用");
+        AssertTrue(suspended.Split('\n').Length <= 2, "暂停面板必须保持单块紧凑输出");
+        AssertTrue(unavailable.Split('\n').Length <= 2, "错误面板必须保持单块紧凑输出");
+    }
+
+    private static O4SelectionRequest CreateO4Request(long roundId, long cycleId, string sessionId, int candidateCount = 2)
+    {
+        O4CandidateView[] candidates =
+        {
+            new O4CandidateView("event-alpha", "Alpha display", EventCategory.Support, EventSource.Foundation, false),
+            new O4CandidateView("event-beta", "Beta display", EventCategory.Support, EventSource.Foundation, false),
+        };
+        return new O4SelectionRequest(
+            roundId,
+            cycleId,
+            sessionId,
+            Utc(7, 30),
+            candidates.Take(candidateCount).ToArray(),
+            "event-alpha");
+    }
+
+    private static O4PlayerSnapshot[] CreateO4Players(int count)
+    {
+        return Enumerable.Range(1, count)
+            .Select(number => new O4PlayerSnapshot("O4-" + number.ToString("00"), true, O4RoleState.Spectator))
+            .ToArray();
+    }
+
+    private static O4VoteSession OpenO4Session(O4SelectionRequest request, IReadOnlyList<O4PlayerSnapshot> voters, DateTime start)
+    {
+        O4VoteSession session = new O4VoteSession(request, voters, start, start.AddSeconds(20), allowVoteChange: true);
+        AssertTrue(session.TryOpen(), "测试 Vote Session 必须打开");
+        return session;
+    }
+
+    private static void CastO4Vote(O4VoteSession session, string voterId, int candidateIndex, DateTime at)
+    {
+        AssertTrue(session.TryCastVote(voterId, candidateIndex, at, true, out _, out _), "测试投票必须成功");
+    }
+
+    private sealed class RecordingO4Selector : IO4EventSelector
+    {
+        private readonly bool isAvailable;
+        private Action<O4SelectionResult>? completed;
+
+        public RecordingO4Selector(bool isAvailable)
+        {
+            this.isAvailable = isAvailable;
+        }
+
+        public bool IsAvailable => isAvailable;
+
+        public int RequestCount { get; private set; }
+
+        public int CancelCount { get; private set; }
+
+        public O4SelectionRequest? LastRequest { get; private set; }
+
+        public void RequestSelection(O4SelectionRequest request, Action<O4SelectionResult> completed)
+        {
+            RequestCount++;
+            LastRequest = request;
+            this.completed = completed;
+        }
+
+        public void CancelAll(string reason)
+        {
+            CancelCount++;
+            completed = null;
+        }
+
+        public void Complete(O4SelectionResult result)
+        {
+            Action<O4SelectionResult>? callback = completed;
+            completed = null;
+            callback?.Invoke(result);
+        }
     }
 
     private static DirectorCycle SelectDirectorCycle(EventDirector director, long roundId, DateTime timestamp)

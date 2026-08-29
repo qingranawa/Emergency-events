@@ -9,6 +9,7 @@ using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RemoteAdminCommands;
 using EmergencyEvents.RoundCore;
 using EmergencyEvents.Runtime;
+using EmergencyEvents.O4;
 using Exiled.API.Features;
 
 namespace EmergencyEvents;
@@ -68,6 +69,7 @@ public sealed partial class Plugin
             EmergencyEventsCommandKind.DisorderEvents => TryFormatDisorderEvents(out response),
             EmergencyEventsCommandKind.DisorderHistory => TryFormatDisorderHistory(request.Number, out response),
             EmergencyEventsCommandKind.DisorderExplain => TryFormatDisorderExplain(out response),
+            EmergencyEventsCommandKind.O4Status => TryFormatO4Status(out response),
             EmergencyEventsCommandKind.TestCrisisAll => TryCheckCrisis("all", isDryRun: true, out response),
             EmergencyEventsCommandKind.TestCrisisCheck => TryCheckCrisis(request.Target, isDryRun: true, out response),
             EmergencyEventsCommandKind.TestCrisisBioZombies => TryRunBioSimulation(request.Number ?? 0, out response),
@@ -93,8 +95,9 @@ public sealed partial class Plugin
             "dlrc" => "【ee dlrc】\nstate | evaluate | stage [full|raw] | breakdown | control | snapshot | history [数量]",
             "crisis" => "【ee crisis】\nstate | list | check all|bio|sys|con|sec|goi|war|end",
             "disorder" or "fdi" => "【ee disorder / ee fdi】\nstate | events | history [数量] | explain",
+            "o4" or "m06" => "【ee o4】\nstatus",
             "test" => "【ee test】\ncrisis ... | disorder event mtf-loss <数量> | cleanup verify",
-            _ => "【EmergencyEvents】\nstatus | enable / disable | modules | round | wave | dlrc | crisis | disorder | health | config | version | test\n使用 ee help <wave|dlrc|crisis|disorder|test> 查看子命令。",
+            _ => "【EmergencyEvents】\nstatus | enable / disable | modules | round | wave | dlrc | crisis | disorder | o4 | health | config | version | test\n使用 ee help <wave|dlrc|crisis|disorder|o4|test> 查看子命令。",
         };
         return true;
     }
@@ -117,7 +120,8 @@ public sealed partial class Plugin
         AppendModuleSummary(builder, "M03 D-LRC", Config.DlrcEvaluatorEnabled, dlrcEvaluatorService?.IsActive == true);
         AppendModuleSummary(builder, "M04 危机系统", Config.CrisisSystemEnabled, crisisManager is not null && runtime?.IsEmergencyEventsActiveForRound == true);
         AppendModuleSummary(builder, "M04.5 Facility Disorder", Config.FacilityDisorder.Enabled, facilityDisorderManager?.State.IsActive == true);
-        builder.AppendLine("M05 事件导演：未实现");
+        builder.AppendLine("M05 事件导演：FRAMEWORK_READY / PRODUCTION_DISABLED");
+        builder.AppendLine($"M06 O4 面板：{(o4PanelService is null ? "NOT_LOADED" : "READY")}");
         AppendCurrentDlrcSummary(builder);
         AppendLatestWaveSummary(builder);
         response = builder.ToString().TrimEnd();
@@ -163,13 +167,14 @@ public sealed partial class Plugin
     {
         PrimaryWaveCaps caps = Config.PrimaryWaveCaps ?? new PrimaryWaveCaps();
         FacilityDisorderConfig disorder = Config.FacilityDisorder;
-        response = $"【EmergencyEvents 配置】\nMinimumPlayers={Config.MinimumPlayers}\nWaveCaps：E{caps.E} D{caps.D} C{caps.C} B{caps.B} A{caps.A}\nTimer Extension：刷新方 +{Config.SpawningFactionTimerExtensionSeconds} 秒；另一方 +{Config.OpposingFactionTimerExtensionSeconds} 秒\nD-LRC：开始时间 {FormatSeconds(Config.DlrcEvaluatorStartTimeSeconds)}；周期 {Config.DlrcEvaluatorIntervalSeconds} 秒\n危机：CON 检查 {Config.CrisisContainmentCheckpointSeconds} 秒；END 激活={Config.CrisisEndActivationSeconds} 秒\nFDI：Enabled={disorder.Enabled}; InitialBase={disorder.InitialBase:0.##}; Lookback={disorder.InitialLookbackSeconds}s; SettlementHistoryCapacity={disorder.SettlementHistoryCapacity}; EventHistoryCapacity={disorder.EventHistoryCapacity}; Bands={disorder.LowMaximum:0.##}/{disorder.MediumMaximum:0.##}/{disorder.HighMinimum:0.##}\n此命令只读，不支持 RA 修改配置。";
+        O4.O4PanelConfig o4 = Config.O4Panel ?? new O4.O4PanelConfig();
+        response = $"【EmergencyEvents 配置】\nMinimumPlayers={Config.MinimumPlayers}\nWaveCaps：E{caps.E} D{caps.D} C{caps.C} B{caps.B} A{caps.A}\nTimer Extension：刷新方 +{Config.SpawningFactionTimerExtensionSeconds} 秒；另一方 +{Config.OpposingFactionTimerExtensionSeconds} 秒\nD-LRC：开始时间 {FormatSeconds(Config.DlrcEvaluatorStartTimeSeconds)}；周期 {Config.DlrcEvaluatorIntervalSeconds} 秒\n危机：CON 检查 {Config.CrisisContainmentCheckpointSeconds} 秒；END 激活={Config.CrisisEndActivationSeconds} 秒\nFDI：Enabled={disorder.Enabled}; InitialBase={disorder.InitialBase:0.##}; Lookback={disorder.InitialLookbackSeconds}s; SettlementHistoryCapacity={disorder.SettlementHistoryCapacity}; EventHistoryCapacity={disorder.EventHistoryCapacity}; Bands={disorder.LowMaximum:0.##}/{disorder.MediumMaximum:0.##}/{disorder.HighMinimum:0.##}\nO4：Enabled={o4.Enabled}; Refresh={o4.RefreshIntervalSeconds:0.##}s; Hint={o4.HintDurationSeconds:0.##}s; Vote={o4.VoteDurationSeconds}s; MaxCandidates={o4.MaxCandidates}; VoteChange={o4.AllowVoteChange}\n此命令只读，不支持 RA 修改配置。";
         return true;
     }
 
     private bool TryFormatHealth(out string response)
     {
-        response = $"【EmergencyEvents 健康检查】\nRuntimeState：{runtimeCoordinator?.State.ToString() ?? "ERROR"}\nRoundContextValid：{FormatBoolean(roundCoreManager?.State is not null)}\nM03 Running：{FormatBoolean(dlrcEvaluatorService?.IsActive == true)}；Busy：{FormatBoolean(dlrcEvaluatorService?.IsEvaluating == true)}；QueuedManualEvaluation：{FormatBoolean(dlrcEvaluatorService?.HasQueuedManualEvaluation == true)}；LastEvaluationValid：{FormatBoolean(dlrcEvaluatorService?.LastResult?.IsValid == true)}\nM04 LastAssessmentValid：{FormatBoolean(crisisManager?.CurrentCrisisAssessment is not null)}\nM04.5 FDI Running：{FormatBoolean(facilityDisorderManager?.State.IsActive == true)}；Suspended：{FormatBoolean(facilityDisorderManager?.State.IsSuspended == true)}；EventCount：{facilityDisorderManager?.Events.Count ?? 0}\nM02 Running：{FormatBoolean(reinforcementManager?.IsRoundActive == true)}；Mini-Wave Interceptor：{FormatBoolean(Config.DisableMiniWaves)}；WaveHistoryCount：{reinforcementManager?.GetMajorWaveRecords().Count ?? 0}\n最近错误数：暂无集中计数\n最近警告数：暂无集中计数";
+        response = $"【EmergencyEvents 健康检查】\nRuntimeState：{runtimeCoordinator?.State.ToString() ?? "ERROR"}\nRoundContextValid：{FormatBoolean(roundCoreManager?.State is not null)}\nM03 Running：{FormatBoolean(dlrcEvaluatorService?.IsActive == true)}；Busy：{FormatBoolean(dlrcEvaluatorService?.IsEvaluating == true)}；QueuedManualEvaluation：{FormatBoolean(dlrcEvaluatorService?.HasQueuedManualEvaluation == true)}；LastEvaluationValid：{FormatBoolean(dlrcEvaluatorService?.LastResult?.IsValid == true)}\nM04 LastAssessmentValid：{FormatBoolean(crisisManager?.CurrentCrisisAssessment is not null)}\nM04.5 FDI Running：{FormatBoolean(facilityDisorderManager?.State.IsActive == true)}；Suspended：{FormatBoolean(facilityDisorderManager?.State.IsSuspended == true)}；EventCount：{facilityDisorderManager?.Events.Count ?? 0}\nM02 Running：{FormatBoolean(reinforcementManager?.IsRoundActive == true)}；Mini-Wave Interceptor：{FormatBoolean(Config.DisableMiniWaves)}；WaveHistoryCount：{reinforcementManager?.GetMajorWaveRecords().Count ?? 0}\nM06 O4 Panel Running：{FormatBoolean(o4PanelService?.IsPanelRunning == true)}；SelectionOpen：{FormatBoolean(o4PanelService?.IsSelectionOpen == true)}\n最近错误数：暂无集中计数\n最近警告数：暂无集中计数";
         return true;
     }
 
@@ -182,7 +187,7 @@ public sealed partial class Plugin
         AppendModuleSummary(builder, "M04 Crisis", Config.CrisisSystemEnabled, crisisManager is not null && runtimeCoordinator?.IsEmergencyEventsActiveForRound == true);
         AppendModuleSummary(builder, "M04.5 Facility Disorder", Config.FacilityDisorder.Enabled, facilityDisorderManager?.State.IsActive == true);
         builder.AppendLine("M05 Director：FRAMEWORK_READY / PRODUCTION_DISABLED");
-        builder.AppendLine("M06 O4 Panel：DEFERRED_BY_DESIGN");
+        builder.AppendLine($"M06 O4 Panel：{(o4PanelService is null ? "NOT_LOADED" : "CORE_READY")}");
         builder.Append("Formal Event Packs：NOT_STARTED");
         response = builder.ToString();
         return true;
@@ -198,9 +203,23 @@ public sealed partial class Plugin
             "dlrc" or "m03" => $"【M03 D-LRC】\n状态：{GetModuleState(Config.DlrcEvaluatorEnabled, dlrcEvaluatorService?.IsActive == true)}\n正在评估：{FormatBoolean(dlrcEvaluatorService?.IsEvaluating == true)}\n最后触发：{dlrcEvaluatorService?.LastTrigger.ToString() ?? "暂无"}",
             "crisis" or "m04" => $"【M04 Crisis】\n状态：{GetModuleState(Config.CrisisSystemEnabled, crisisManager is not null && runtimeCoordinator?.IsEmergencyEventsActiveForRound == true)}\n最近危机结果：{crisisManager?.CurrentCrisisAssessment?.Code ?? "暂无"}\nWAR：{FormatWarModuleState()}",
             "disorder" or "fdi" or "m045" => $"【M04.5 Facility Disorder】\n状态：{GetModuleState(Config.FacilityDisorder.Enabled, facilityDisorderManager?.State.IsActive == true)}\n当前值：{facilityDisorderManager?.State.CurrentFacilityDisorder:0.##}\n区间：{facilityDisorderManager?.State.DisorderBand}\n最近结算：{FormatNullableTime(facilityDisorderManager?.State.LastSettlementAt)}",
+            "o4" or "m06" => FormatO4Status(),
             _ => "未知模块。使用 ee module <round|reinforcement|dlrc|crisis|disorder>。",
         };
-        return normalized is "round" or "roundcore" or "m01" or "reinforcement" or "wave" or "m02" or "dlrc" or "m03" or "crisis" or "m04" or "disorder" or "fdi" or "m045";
+        return normalized is "round" or "roundcore" or "m01" or "reinforcement" or "wave" or "m02" or "dlrc" or "m03" or "crisis" or "m04" or "disorder" or "fdi" or "m045" or "o4" or "m06";
+    }
+
+    private bool TryFormatO4Status(out string response)
+    {
+        response = FormatO4Status();
+        return true;
+    }
+
+    private string FormatO4Status()
+    {
+        O4PanelRuntimeService? panel = o4PanelService;
+        string sessionId = panel?.SessionId ?? string.Empty;
+        return $"【M06 O4 COMMAND PANEL】\nEnabled：{FormatBoolean(panel is not null)}\nPanelRunning：{FormatBoolean(panel?.IsPanelRunning == true)}\nEligibleO4：{panel?.EligibleO4Count ?? 0}\nSelectionOpen：{FormatBoolean(panel?.IsSelectionOpen == true)}\nSessionId：{(string.IsNullOrEmpty(sessionId) ? "暂无" : sessionId)}\nCycleId：{(panel?.CycleId ?? 0L).ToString()}\nVotesReceived：{panel?.VotesReceived ?? 0}\nTimeRemaining：{panel?.TimeRemainingSeconds ?? 0}s\nPlayerInput：o4vote <1|2>（ClientCommandHandler）";
     }
 
     private bool TryFormatRound(out string response)

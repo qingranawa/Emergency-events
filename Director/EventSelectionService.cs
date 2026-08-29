@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 
 namespace EmergencyEvents.Director;
@@ -58,7 +59,13 @@ public sealed class EventSelectionService
             .ToArray();
         EventCandidate selected = sourceCandidates[0];
         bool needsO4 = source == EventSource.Foundation && sourceCandidates.Length > 1 && context.HasO4Selector;
-        return new SelectionDecision(selected, source.Value, needsO4, true, needsO4 ? "FoundationO4WithFallback" : "AutomaticSourceSelection");
+        return new SelectionDecision(
+            selected,
+            source.Value,
+            needsO4,
+            true,
+            needsO4 ? "FoundationO4WithFallback" : "AutomaticSourceSelection",
+            needsO4 ? sourceCandidates.Take(2).ToArray() : new[] { selected });
     }
 
     public SelectionDecision? SelectNonSupport(
@@ -87,13 +94,16 @@ public sealed class SelectionDecision
         EventSource source,
         bool o4SelectionRequired,
         bool hasFallback,
-        string reason)
+        string reason,
+        IReadOnlyList<EventCandidate>? o4Shortlist = null)
     {
         Candidate = candidate ?? throw new ArgumentNullException(nameof(candidate));
         Source = source;
         O4SelectionRequired = o4SelectionRequired;
         HasFallback = hasFallback;
         Reason = reason ?? string.Empty;
+        O4Shortlist = new ReadOnlyCollection<EventCandidate>(
+            (o4Shortlist ?? new[] { Candidate }).Where(item => item is not null).ToArray());
     }
 
     public EventCandidate Candidate { get; }
@@ -105,4 +115,6 @@ public sealed class SelectionDecision
     public bool HasFallback { get; }
 
     public string Reason { get; }
+
+    public IReadOnlyList<EventCandidate> O4Shortlist { get; }
 }

@@ -35,9 +35,11 @@ M05 Scheduler 与 M03 30 秒 PERIODIC 独立。正式 Director Cadence 尚未确
 
 GOI Detector 使用 `HostileThirdPartyActive`、战斗人数、D-LRC FinalLevel 和 Foundation disadvantage，但正式 GOI runtime provider 仍是 `INTERFACE READY / PROVISIONAL`。GOI Crisis 不等于 GOI Source Event 自动合法。
 
-## DEFERRED BY DESIGN: M06 O4 Panel
+## M06 O4 Panel
 
-M06 是 O4 Panel，当前不实现 HUD、Panel、Voting UI、Player eligibility、Interaction 或 Observer UX。M05 的 `HasO4Selector=false` 是合法系统状态；Foundation 多候选时必须有 fallback，O4 不选择来源、不召唤事件、不阻止 Chaos/GOI。
+M06 核心面板与二选一选择层已实现：Spectator/Overwatch 单 Hint、真实客户端 `o4vote` 输入、M05 shortlist/fallback 边界、有界会话和生命周期清理。它不包含 GUI/canvas、正式 Event Pack 或对事件执行器的控制。
+
+仍待真人验证：真实客户端 Hint 视觉位置与刷新体验、客户端命令可达性、观察者断线/复活期间的投票资格变化，以及实服日志中的选择/回退生命周期。M05 的 `HasO4Selector=false` 在 M06 禁用、无 O4 或不可用时仍是合法状态。
 
 ## 设计变更规则
 

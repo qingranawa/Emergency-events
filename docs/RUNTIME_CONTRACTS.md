@@ -8,7 +8,7 @@
 
 `PluginRuntimeCoordinator` 在回合开始时记录 `RoundStartPopulation` 和 `PopulationTier` 所需事实。少于 `MinimumPlayers`（配置默认 16）时不激活；活动回合降到最低人数以下时进入不可逆的 `LOW_POPULATION_SUSPENDED`。恢复到 16 人不会重新启用本回合模块，必须等待下一局。
 
-回合结束或进入 WaitingForPlayers 时，Round Core、Reinforcement、Crisis、FDI 和 Director 都应清理自己的回合状态。
+回合结束或进入 WaitingForPlayers 时，Round Core、Reinforcement、Crisis、FDI、Director 和 O4 Panel 都应清理自己的回合状态。
 
 ## M02 wave contract
 
@@ -147,7 +147,17 @@ DueAt = Event1ActualSpawnTime + SecondSlotDelaySeconds
 
 只有 Foundation 有多个合法普通候选且 `HasO4Selector=true` 时才标记 `O4SelectionRequired`。没有 O4 或投票不可用时使用 fallback。O4 不选择来源，不召唤事件，也不能阻止 Chaos/GOI。
 
-M06 尚未实现时 `HasO4Selector=false` 是合法系统状态，不能作为当前 M05 的错误条件。
+M06 启用时也只有在线 Spectator/Overwatch 才可作为 Selector；无 O4、面板禁用、低人口暂停或运行时不可用仍是合法系统状态，不能作为 M05 错误条件，必须保留 fallback。
+
+## M06 O4 Panel contract
+
+M06 的展示和选择只消费已完成的上游事实。普通 Hint 只向当前在线 Spectator/Overwatch 发送，使用 EXILED `Player.ShowHint(string, float)`；目标 API 没有可靠的 Hint anchor/offset，因此不伪造位置契约。
+
+客户端使用 `o4vote <1|2>`（别名 `eevote`）投票。它通过 `ClientCommandHandler` 处理，不是 RA 命令；`ee o4 status` 只读。会话开始时冻结合格 O4 快照，结算时再次过滤断线、复活或不再是 Spectator/Overwatch 的投票。
+
+M05 仅在 Foundation 多个合法普通 SUPPORT 候选且 `HasO4Selector=true` 时传入最多两个已排序候选。M06 不生成、排序、过滤候选，也不能影响 Chaos、GOI、Professional Response 或 NON_SUPPORT。多数票只能选择 shortlist 内候选；平票、零票、无 O4、取消、超时、stale callback 或任何非法结果都使用 M05 fallback。M05 必须继续在 Start/Commit 前重验证。
+
+Round End、Restart、WaitingForPlayers、Plugin Disable、LOW_POPULATION_SUSPENDED 和 Runtime Cleanup 必须 Kill Hint/超时回调、取消一次会话并清空局部 O4 ID。最近选择结果默认最多 256 条；不保留账号或身份标识。
 
 ## FacilityState
 

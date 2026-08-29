@@ -79,6 +79,16 @@ public sealed class FacilityDisorderConfig
 
     public double FactionAdvantageChanged { get; set; } = 0d;
 
+    public bool OrderRecoveryEnabled { get; set; } = true;
+
+    public int OrderRecoveryQuietWindowSeconds { get; set; } = 90;
+
+    public double OrderRecoveryHighDelta { get; set; } = -2d;
+
+    public double OrderRecoveryMediumDelta { get; set; } = -1d;
+
+    public double OrderRecoveryLowDelta { get; set; } = 0d;
+
     public double CurrentMtfPerCombatant { get; set; } = -1d;
 
     public double CurrentChaosPerCombatant { get; set; } = 1d;
@@ -136,6 +146,10 @@ public sealed class FacilityDisorderConfig
         CurrentWarheadCountdownActive = Normalize(CurrentWarheadCountdownActive, 3d);
         CurrentWarheadDetonated = Normalize(CurrentWarheadDetonated, 0d);
         FactionAdvantageChanged = Normalize(FactionAdvantageChanged, 0d);
+        OrderRecoveryQuietWindowSeconds = Math.Min(Math.Max(OrderRecoveryQuietWindowSeconds, 30), 600);
+        OrderRecoveryHighDelta = NormalizeRecoveryDelta(OrderRecoveryHighDelta, -2d);
+        OrderRecoveryMediumDelta = NormalizeRecoveryDelta(OrderRecoveryMediumDelta, -1d);
+        OrderRecoveryLowDelta = NormalizeRecoveryDelta(OrderRecoveryLowDelta, 0d);
         if (LowMinimum > LowMaximum || LowMaximum >= MediumMinimum || MediumMinimum > MediumMaximum || MediumMaximum >= HighMinimum || HighMinimum > HighMaximum)
         {
             LowMinimum = 0d;
@@ -150,5 +164,11 @@ public sealed class FacilityDisorderConfig
     private static double Normalize(double value, double fallback)
     {
         return double.IsNaN(value) || double.IsInfinity(value) ? fallback : value;
+    }
+
+    private static double NormalizeRecoveryDelta(double value, double fallback)
+    {
+        value = Normalize(value, fallback);
+        return Math.Min(0d, Math.Max(-10d, value));
     }
 }

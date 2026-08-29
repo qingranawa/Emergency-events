@@ -4,6 +4,7 @@ using EmergencyEvents.Crisis;
 using EmergencyEvents.Director;
 using EmergencyEvents.Disorder;
 using EmergencyEvents.Reinforcement;
+using EmergencyEvents.Telemetry;
 using Exiled.API.Interfaces;
 
 namespace EmergencyEvents;
@@ -102,6 +103,9 @@ public sealed class Config : IConfig
 
     [Description("Facility Disorder System 配置。FDI 只在正常 PERIODIC 评估完成后结算，不改写 M03/M04 分数。")]
     public FacilityDisorderConfig FacilityDisorder { get; set; } = new FacilityDisorderConfig();
+
+    [Description("是否记录不参与 Gameplay 的平衡 Telemetry。")]
+    public BalanceTelemetryConfig BalanceTelemetry { get; set; } = new BalanceTelemetryConfig();
 
     [Description("Module 05 Event Director 配置。Phase 1 默认关闭生产事件，只保留框架与测试入口。")]
     public EventDirectorConfig EventDirector { get; set; } = new EventDirectorConfig();

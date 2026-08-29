@@ -7,7 +7,7 @@
 1. D-LRC population-tier reachability。
 2. Small Primary Wave failure volatility。
 3. Foundation=0 时的 Collapse semantics。
-4. FDI Order Recovery。
+4. FDI Order Recovery（MODEL D 已实现；默认参数仍需真人数据校准）。
 5. Low Population Debounce。
 6. Director Cadence。
 7. Event Intensity、ExclusiveGroup 和 overlap rules。
@@ -21,7 +21,7 @@
 
 ### FDI Order Recovery
 
-当前 FDI 是增量结算模型，没有最终的被动恢复规则。不能把“每分钟 -1”或“每 30 秒 -2”写成现行契约。
+当前 FDI 保持增量结算模型，并增加可配置的 MODEL D 被动恢复；Recovery 参数仍需真人数据校准，不能据此修改 D-LRC 阈值或评分公式。
 
 ### 低人口防抖
 

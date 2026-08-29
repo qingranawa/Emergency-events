@@ -21,9 +21,12 @@
 - FDI：28/28。
 - M05：46/46。
 - Total：175/175 PASS。
+- Balance Phase 2A 当前新增 7 项测试后：182/182 PASS。
 - Release Build：PASS，Warnings=0，Errors=0。
 - Isolated Runtime：PASS。
 - Live Player Validation：PENDING。
+
+Balance Phase 2A 新增 Recovery 与 Telemetry 测试，覆盖静默窗口、Band、正向事件重置、危机/强敌/核毁 Gate、普通 Delta 互斥、回合清理、官方 Evaluation 只读采集、JSONL 隐私和长运行有界性。Telemetry 只作为 observer，真人回合数据仍需单独验证。
 
 M01 还包含 10,000 次 SCP-939 模拟：Double939Count=1042，TotalScpPerRound 始终为 3。
 

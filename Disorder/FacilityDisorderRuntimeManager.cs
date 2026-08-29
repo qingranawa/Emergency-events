@@ -173,6 +173,7 @@ public sealed class FacilityDisorderRuntimeManager
             if (settlement is not null)
             {
                 LogInfo($"PeriodicSettlement; WindowStart={settlement.WindowStart:O}; WindowEnd={settlement.WindowEnd:O}; Previous={settlement.PreviousValue:0.####}; CurrentStockAdjustment={settlement.CurrentStockAdjustment:0.####}; RecentTransientDelta={settlement.RecentTransientDelta:0.####}; Delta={settlement.Delta:0.####}; Current={settlement.CurrentValue:0.####}; Band={State.DisorderBand}; EventCount={settlement.ProcessedEvents.Count}");
+                LogInfo($"ORDER_RECOVERY_CHECK; RoundId={roundId}; EvaluationId={completedEvent.EvaluationId}; Timestamp={completedEvent.Snapshot.Timestamp:O}; CurrentFDI={settlement.PreviousValue:0.####}; CurrentBandBefore={ResolveBandForLog(settlement.PreviousValue)}; QuietWindowSeconds={config.OrderRecoveryQuietWindowSeconds}; LastPositiveDisorderAt={State.LastPositiveDisorderAt:O}; LastRecoveryAt={State.LastRecoveryAt:O}; ActiveCrises={string.Join(",", assessment!.ActiveTags)}; FacilityDestroyed={completedEvent.Snapshot.WarheadDetonated}; OrdinaryDeltaThisCycle={settlement.RecentTransientDelta:0.####}; RecoveryDelta={settlement.OrderRecoveryDelta:0.####}; AfterFDI={settlement.CurrentValue:0.####}; Result={settlement.RecoveryResult}");
             }
         }
     }
@@ -441,6 +442,16 @@ public sealed class FacilityDisorderRuntimeManager
         previousWarheadDetonated = false;
         eventSequence = 0L;
         roundId = 0L;
+    }
+
+    private string ResolveBandForLog(double value)
+    {
+        if (value < config.MediumMinimum)
+        {
+            return "LOW";
+        }
+
+        return value < config.HighMinimum ? "MEDIUM" : "HIGH";
     }
 
     private static bool IsFoundation(RoleTypeId role)

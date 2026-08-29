@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
 using EmergencyEvents.Crisis;
 using EmergencyEvents.Crisis.Detectors;
 using EmergencyEvents.Director;
@@ -11,6 +12,7 @@ using EmergencyEvents.RemoteAdminCommands;
 using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RoundCore;
 using EmergencyEvents.Runtime;
+using EmergencyEvents.Telemetry;
 
 namespace EmergencyEvents.Evaluation.Tests;
 
@@ -148,6 +150,13 @@ internal static class Program
             ("FDI 近期 Combat Transient 不被当前 MTF 存量吞掉", FdiRecentCombatTransientSurvivesCurrentStock),
             ("FDI 079 SYS 升级链只保留一个非零 Delta", Fdi079SysUpgradeChainHasOneNonZeroDelta),
             ("FDI 079 SYS 移除链只保留一个非零 Delta", Fdi079SysRemovalChainHasOneNonZeroDelta),
+            ("FDI Order Recovery 按静默窗口和 Band 计算", FdiOrderRecoveryUsesQuietWindowAndBands),
+            ("FDI Order Recovery 被正向事件重置", FdiOrderRecoveryResetsAfterPositiveEvent),
+            ("FDI Order Recovery 被危机和强敌状态阻断", FdiOrderRecoveryRespectsStateGates),
+            ("FDI Order Recovery 与普通负 Delta 不叠加", FdiOrderRecoveryDoesNotStackWithOrdinaryDelta),
+            ("FDI Order Recovery Round cleanup 清除时间状态", FdiOrderRecoveryCleanupClearsState),
+            ("Balance Telemetry 只记录官方结果并输出 JSONL", BalanceTelemetryWritesOfficialEvaluation),
+            ("Balance Telemetry 2000 次评估后保持有界", BalanceTelemetryRemainsBoundedAfterLongRun),
             ("M05 EventDefinition 只声明一个 L0-L5 响应等级", DirectorDefinitionDeclaresOneResponseLevel),
             ("M05 多危机标签按 AND 条件保存", DirectorDefinitionPreservesCrisisAndRequirements),
             ("M05 人员计划按人口档位可读", DirectorDefinitionExposesTierPersonnelPlan),
@@ -1454,6 +1463,113 @@ internal static class Program
         service.Record(new DisorderEvent("sys-resolved", nextAt, DisorderEventCategory.CrisisTransition, -4d, "SYS L3->OFF", isRepresentedByCurrentStock: true));
         FacilityDisorderSettlement? settlement = SettleFdi(service, nextAt, new FacilityDisorderStockSnapshot(0, 0, 0, 0, false, 0, null, false, false, false), evaluationId: 39, roundId: 38);
         AssertNear(-4d, settlement!.RecentTransientDelta, "079/SYS 移除链只能保留 SYS 非零 Delta");
+    }
+
+    private static void FdiOrderRecoveryUsesQuietWindowAndBands()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 80d, OrderRecoveryQuietWindowSeconds = 90 };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime initial = Utc(6, 31);
+        service.StartRound(initial.AddMinutes(-5), 16);
+        SettleFdi(service, initial, new FacilityDisorderStockSnapshot(0, 0, 0, 0, false, 0, null, false, false, false));
+        FacilityDisorderSettlement? first = SettleFdi(service, initial.AddSeconds(90), evaluationId: 2);
+        AssertNear(-2d, first!.OrderRecoveryDelta, "HIGH band 90 秒静默应恢复 -2");
+        FacilityDisorderSettlement? second = SettleFdi(service, initial.AddSeconds(120), evaluationId: 3);
+        AssertNear(0d, second!.OrderRecoveryDelta, "一次恢复后未满新窗口不得再次恢复");
+        FacilityDisorderSettlement? third = SettleFdi(service, initial.AddSeconds(180), evaluationId: 4);
+        AssertNear(-2d, third!.OrderRecoveryDelta, "新的 90 秒静默窗口应允许第二次恢复");
+    }
+
+    private static void FdiOrderRecoveryResetsAfterPositiveEvent()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 80d, OrderRecoveryQuietWindowSeconds = 90 };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime initial = Utc(6, 31);
+        service.StartRound(initial.AddMinutes(-5), 16);
+        SettleFdi(service, initial);
+        service.Record(new DisorderEvent("positive", initial.AddSeconds(80), DisorderEventCategory.CombatDeath, 3d));
+        FacilityDisorderSettlement? settlement = SettleFdi(service, initial.AddSeconds(90), evaluationId: 2);
+        AssertNear(0d, settlement!.OrderRecoveryDelta, "正向事件后仅 10 秒不得恢复");
+        AssertEqual(initial.AddSeconds(80), service.State.LastPositiveDisorderAt, "正向事件应重置静默起点");
+    }
+
+    private static void FdiOrderRecoveryRespectsStateGates()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 80d, OrderRecoveryQuietWindowSeconds = 90 };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime initial = Utc(6, 31);
+        service.StartRound(initial.AddMinutes(-5), 16);
+        SettleFdi(service, initial);
+        DateTime next = initial.AddSeconds(90);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 2, timestamp: next);
+        CrisisAssessment assessment = CreateCrisisAssessment(snapshot, CrisisTag.BIO);
+        FacilityDisorderSettlement? crisis = SettleFdi(service, next, CreateStock(snapshot, assessment), 2, assessment, roundId: 0);
+        AssertNear(0d, crisis!.OrderRecoveryDelta, "Active Crisis 必须阻断恢复");
+        FacilityDisorderStockSnapshot hostile = new FacilityDisorderStockSnapshot(3, 4, 0, 7, false, 0, null, false, false, false);
+        FacilityDisorderSettlement? chaos = SettleFdi(service, next.AddSeconds(90), hostile, 3);
+        AssertNear(0d, chaos!.OrderRecoveryDelta, "明显 Chaos 优势必须阻断恢复");
+        FacilityDisorderStockSnapshot destroyed = new FacilityDisorderStockSnapshot(0, 0, 0, 0, false, 0, null, false, false, true);
+        FacilityDisorderSettlement? end = SettleFdi(service, next.AddSeconds(180), destroyed, 4);
+        AssertNear(0d, end!.OrderRecoveryDelta, "设施核毁时必须阻断恢复");
+    }
+
+    private static void FdiOrderRecoveryDoesNotStackWithOrdinaryDelta()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 80d, OrderRecoveryQuietWindowSeconds = 90 };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime initial = Utc(6, 31);
+        service.StartRound(initial.AddMinutes(-5), 16);
+        SettleFdi(service, initial);
+        service.Record(new DisorderEvent("ordinary-negative", initial.AddSeconds(90), DisorderEventCategory.CrisisTransition, -4d));
+        FacilityDisorderSettlement? settlement = SettleFdi(service, initial.AddSeconds(90), evaluationId: 2);
+        AssertNear(-4d, settlement!.RecentTransientDelta, "普通负事件应正常结算");
+        AssertNear(0d, settlement.OrderRecoveryDelta, "普通负事件同周期不得叠加 Recovery");
+    }
+
+    private static void FdiOrderRecoveryCleanupClearsState()
+    {
+        FacilityDisorderConfig config = new FacilityDisorderConfig { InitialBase = 80d };
+        FacilityDisorderService service = new FacilityDisorderService(config);
+        DateTime initial = Utc(6, 31);
+        service.StartRound(initial.AddMinutes(-5), 16);
+        SettleFdi(service, initial);
+        service.Record(new DisorderEvent("positive", initial.AddSeconds(10), DisorderEventCategory.CombatDeath, 1d));
+        AssertTrue(service.State.QuietWindowStart.HasValue, "Recovery timeline 应已建立");
+        service.CleanupRound();
+        AssertTrue(!service.State.QuietWindowStart.HasValue && !service.State.LastRecoveryAt.HasValue && !service.State.LastPositiveDisorderAt.HasValue, "Round cleanup 必须清理 Recovery 状态");
+    }
+
+    private static void BalanceTelemetryWritesOfficialEvaluation()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "EmergencyEventsTelemetry-" + Guid.NewGuid().ToString("N"));
+        BalanceTelemetryService telemetry = new BalanceTelemetryService(new BalanceTelemetryConfig(), directory);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 901, timestamp: Utc(6, 31));
+        DlrcEvaluationResult result = CreateResult(snapshot);
+        DlrcEvaluationCompletedEvent evaluation = new DlrcEvaluationCompletedEvent(1, DlrcEvaluationTrigger.PERIODIC, snapshot, result);
+        CrisisAssessment assessment = new CrisisAssessment(1, DlrcEvaluationTrigger.PERIODIC, snapshot, result, Array.Empty<CrisisDetectionResult>());
+        telemetry.StartRound(901, snapshot.Timestamp, 16);
+        telemetry.RecordEvaluation(evaluation, assessment, 42d, FacilityDisorderBand.MEDIUM, "PROVISIONAL_NORMAL");
+        string[] files = Directory.GetFiles(directory, "balance-*.jsonl");
+        AssertEqual(1, files.Length, "Telemetry 应创建 balance JSONL");
+        string line = File.ReadAllLines(files[0])[0];
+        AssertTrue(line.Contains("DLRC_EVALUATION", StringComparison.Ordinal) && line.Contains("\"fdi\":\"42", StringComparison.Ordinal), "Telemetry 应读取官方评估并记录 FDI");
+        AssertTrue(!line.Contains("SteamId", StringComparison.OrdinalIgnoreCase) && !line.Contains("Nickname", StringComparison.OrdinalIgnoreCase), "Telemetry 不得写入玩家标识");
+    }
+
+    private static void BalanceTelemetryRemainsBoundedAfterLongRun()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "EmergencyEventsTelemetryLong-" + Guid.NewGuid().ToString("N"));
+        BalanceTelemetryService telemetry = new BalanceTelemetryService(new BalanceTelemetryConfig { RecentRecordCapacity = 64 }, directory);
+        telemetry.StartRound(902, Utc(6, 31), 16);
+        for (int index = 0; index < 2000; index++)
+        {
+            DateTime timestamp = Utc(6, 31).AddSeconds(index);
+            RoundSnapshot snapshot = CreateSnapshot(roundId: 902, timestamp: timestamp);
+            DlrcEvaluationResult result = CreateResult(snapshot);
+            telemetry.RecordEvaluation(new DlrcEvaluationCompletedEvent(index + 1, DlrcEvaluationTrigger.PERIODIC, snapshot, result), null, index % 101, FacilityDisorderBand.LOW, "PROVISIONAL_NORMAL");
+        }
+        AssertEqual(64, telemetry.CurrentRecordCount, "Telemetry 最近记录必须有界");
+        AssertEqual(64, telemetry.CurrentEvaluationSamples, "Telemetry 内存样本计数也必须有界");
     }
 
     private static DlrcEvaluationCompletedEvent CreateEvaluation(RoundSnapshot snapshot, long evaluationId)

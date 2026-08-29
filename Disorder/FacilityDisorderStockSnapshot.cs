@@ -17,7 +17,8 @@ public sealed class FacilityDisorderStockSnapshot
         CrisisAssessment? crisisAssessment,
         bool warheadUnlocked,
         bool warheadActive,
-        bool warheadDetonated)
+        bool warheadDetonated,
+        bool isFacilityDestroyed = false)
     {
         MtfCount = Normalize(mtfCount);
         ChaosCount = Normalize(chaosCount);
@@ -29,6 +30,7 @@ public sealed class FacilityDisorderStockSnapshot
         WarheadUnlocked = warheadUnlocked;
         WarheadActive = warheadActive;
         WarheadDetonated = warheadDetonated;
+        IsFacilityDestroyed = isFacilityDestroyed || warheadDetonated;
     }
 
     public int MtfCount { get; }
@@ -50,6 +52,8 @@ public sealed class FacilityDisorderStockSnapshot
     public bool WarheadActive { get; }
 
     public bool WarheadDetonated { get; }
+
+    public bool IsFacilityDestroyed { get; }
 
     private static int Normalize(int value)
     {

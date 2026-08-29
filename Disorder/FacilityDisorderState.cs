@@ -27,6 +27,12 @@ public sealed class FacilityDisorderState
 
     public FacilityDisorderSettlement? LastSettlement { get; internal set; }
 
+    public DateTime? LastPositiveDisorderAt { get; internal set; }
+
+    public DateTime? LastRecoveryAt { get; internal set; }
+
+    public DateTime? QuietWindowStart { get; internal set; }
+
     internal void Reset()
     {
         IsActive = false;
@@ -39,5 +45,8 @@ public sealed class FacilityDisorderState
         LastProcessedAt = null;
         LastSettlementAt = null;
         LastSettlement = null;
+        LastPositiveDisorderAt = null;
+        LastRecoveryAt = null;
+        QuietWindowStart = null;
     }
 }

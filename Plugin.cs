@@ -1,3 +1,4 @@
+using System.IO;
 using System;
 using System.Linq;
 using EmergencyEvents.Crisis;
@@ -14,6 +15,7 @@ using EmergencyEvents.Reinforcement;
 using EmergencyEvents.RoundCore;
 using EmergencyEvents.Runtime;
 using MEC;
+using EmergencyEvents.Telemetry;
 
 namespace EmergencyEvents;
 
@@ -28,6 +30,7 @@ public sealed partial class Plugin : Plugin<Config>
     private CrisisManager? crisisManager;
     private FacilityDisorderRuntimeManager? facilityDisorderManager;
     private EventDirectorRuntimeManager? eventDirectorManager;
+    private BalanceTelemetryService? balanceTelemetryService;
     private PluginRuntimeCoordinator? runtimeCoordinator;
     private readonly IFacilityStateProvider facilityStateProvider = new SnapshotFacilityStateProvider();
 
@@ -57,6 +60,8 @@ public sealed partial class Plugin : Plugin<Config>
     public FacilityDisorderRuntimeManager? FacilityDisorder => facilityDisorderManager;
 
     public EventDirectorRuntimeManager? EventDirector => eventDirectorManager;
+
+    public BalanceTelemetryService? BalanceTelemetry => balanceTelemetryService;
 
     public PluginRuntimeCoordinator? Runtime => runtimeCoordinator;
 
@@ -113,6 +118,7 @@ public sealed partial class Plugin : Plugin<Config>
         eventDirectorManager = new EventDirectorRuntimeManager(
             new EventDirector(Array.Empty<EventDefinition>(), Config.EventDirector),
             Config.MinimumPlayers);
+        balanceTelemetryService = new BalanceTelemetryService(Config.BalanceTelemetry, Path.Combine(Paths.Plugins, "EmergencyEvents", "telemetry"));
         reinforcementManager.MajorWaveCompleted += OnMajorWaveCompleted;
         dlrcEvaluatorService.EvaluationCompleted += OnDlrcEvaluationCompleted;
 
@@ -153,6 +159,7 @@ public sealed partial class Plugin : Plugin<Config>
         WarheadEvents.Detonated -= OnWarheadDetonated;
 
         dlrcEvaluatorService?.CleanupRound("OnDisabled");
+        CompleteBalanceTelemetryRound();
         facilityDisorderManager?.CleanupRound();
         eventDirectorManager?.CleanupRound();
         if (dlrcEvaluatorService is not null)
@@ -176,6 +183,7 @@ public sealed partial class Plugin : Plugin<Config>
         roundCoreManager?.CleanupRound();
         roundCoreManager = null;
         eventDirectorManager = null;
+        balanceTelemetryService = null;
         runtimeCoordinator = null;
         if (ReferenceEquals(Instance, this))
         {
@@ -188,6 +196,7 @@ public sealed partial class Plugin : Plugin<Config>
 
     private void OnWaitingForPlayers()
     {
+        CompleteBalanceTelemetryRound();
         dlrcEvaluatorService?.ResetForWaitingForPlayers();
         facilityDisorderManager?.CleanupRound();
         eventDirectorManager?.CleanupRound();
@@ -199,6 +208,7 @@ public sealed partial class Plugin : Plugin<Config>
 
     private void OnRestartingRound()
     {
+        CompleteBalanceTelemetryRound();
         RoundRestartResetter.Reset(
             reason => dlrcEvaluatorService?.CleanupRound(reason),
             () => reinforcementManager?.CleanupRound(),
@@ -226,6 +236,7 @@ public sealed partial class Plugin : Plugin<Config>
             roundCoreManager?.State?.Resolution.Tier ?? PopulationTier.E);
         dlrcEvaluatorService?.StartRound(roundCoreManager?.State, reinforcementManager);
         facilityDisorderManager?.StartRound(DateTime.UtcNow, openingPopulation, roundId);
+        balanceTelemetryService?.StartRound(roundId, DateTime.UtcNow, openingPopulation);
         eventDirectorManager?.StartRound(
             roundId,
             roundCoreManager?.State?.Resolution.Tier ?? PopulationTier.E);
@@ -250,6 +261,7 @@ public sealed partial class Plugin : Plugin<Config>
 
     private void OnRoundEnded(RoundEndedEventArgs _)
     {
+        CompleteBalanceTelemetryRound();
         dlrcEvaluatorService?.CleanupRound("RoundEnded");
         facilityDisorderManager?.CleanupRound();
         eventDirectorManager?.CleanupRound();
@@ -312,6 +324,11 @@ public sealed partial class Plugin : Plugin<Config>
     private void OnMajorWaveCompleted(MajorWaveCompletedEvent ev)
     {
         dlrcEvaluatorService?.HandleMajorWaveCompleted(ev);
+        MajorWaveRecord? record = reinforcementManager?.GetMajorWaveRecords().FirstOrDefault(item => item.WaveId == ev.WaveId);
+        if (record is not null)
+        {
+            balanceTelemetryService?.RecordWave(ev.RoundId, record);
+        }
     }
 
     private bool IsEmergencyEventsActiveForRound()
@@ -370,6 +387,28 @@ public sealed partial class Plugin : Plugin<Config>
     {
         CrisisAssessment? assessment = crisisManager?.Evaluate(completedEvent);
         facilityDisorderManager?.HandleEvaluation(completedEvent, assessment);
+        if (assessment is not null)
+        {
+            balanceTelemetryService?.RecordCrisis(assessment);
+        }
+
+        balanceTelemetryService?.RecordEvaluation(
+            completedEvent,
+            assessment,
+            facilityDisorderManager?.State.CurrentFacilityDisorder ?? 0d,
+            facilityDisorderManager?.State.DisorderBand ?? FacilityDisorderBand.LOW,
+            completedEvent.Snapshot.WarheadDetonated ? "DESTROYED" : "PROVISIONAL_NORMAL");
+        FacilityDisorderSettlement? settlement = facilityDisorderManager?.State.LastSettlement;
+        if (completedEvent.Trigger == DlrcEvaluationTrigger.PERIODIC
+            && settlement is not null
+            && settlement.WindowEnd == completedEvent.Snapshot.Timestamp)
+        {
+            balanceTelemetryService?.RecordSettlement(
+                settlement,
+                completedEvent.Snapshot.RoundId,
+                completedEvent.Snapshot.Timestamp,
+                assessment is null ? null : string.Join(",", assessment.ActiveTags));
+        }
         eventDirectorManager?.HandleEvaluation(
             completedEvent,
             assessment,
@@ -388,6 +427,20 @@ public sealed partial class Plugin : Plugin<Config>
     private void OnCrisisChanged(CrisisAssessment? previous, CrisisAssessment current)
     {
         Log.Info($"[EmergencyEvents]{CrisisLogFormatter.FormatChange(previous, current)}");
+    }
+
+    private void CompleteBalanceTelemetryRound()
+    {
+        if (balanceTelemetryService is null || facilityDisorderManager?.State.RoundId is not long currentRoundId || currentRoundId == 0L)
+        {
+            return;
+        }
+
+        balanceTelemetryService.CompleteRound(
+            currentRoundId,
+            DateTime.UtcNow,
+            roundCoreManager?.State?.Resolution.Tier.ToString(),
+            roundCoreManager?.State?.StartPopulation ?? 0);
     }
 
     private CrisisOptions BuildCrisisOptions()

@@ -6,7 +6,7 @@ using EmergencyEvents.Crisis;
 namespace EmergencyEvents.Disorder;
 
 /// <summary>
-/// FDI 纯逻辑服务。首次成功 PERIODIC 使用存量加窗口瞬时量，之后只使用纯增量。
+/// FDI 纯逻辑服务。首次成功 PERIODIC 使用存量加窗口瞬时量，之后只使用纯增量和合规恢复。
 /// </summary>
 public sealed class FacilityDisorderService
 {
@@ -72,6 +72,11 @@ public sealed class FacilityDisorderService
         }
 
         events.Add(disorderEvent);
+        if (State.IsInitialized && disorderEvent.Delta > 0d)
+        {
+            State.LastPositiveDisorderAt = disorderEvent.Timestamp;
+            State.QuietWindowStart = disorderEvent.Timestamp;
+        }
         return true;
     }
 
@@ -115,7 +120,27 @@ public sealed class FacilityDisorderService
         double recentTransientDelta = isInitialSettlement
             ? processed.Where(disorderEvent => !disorderEvent.IsRepresentedByCurrentStock).Sum(disorderEvent => disorderEvent.Delta)
             : processed.Sum(disorderEvent => disorderEvent.Delta);
-        double delta = currentStockAdjustment + recentTransientDelta;
+        double orderRecoveryDelta = 0d;
+        FacilityDisorderRecoveryDecision recoveryDecision = new FacilityDisorderRecoveryDecision(false, 0d, "NOT_INITIALIZED", 0d, "INITIAL_SETTLEMENT");
+        if (isInitialSettlement)
+        {
+            State.QuietWindowStart = timestamp;
+        }
+        else
+        {
+            recoveryDecision = FacilityDisorderRecoveryPolicy.Evaluate(
+                timestamp,
+                State,
+                stock ?? throw new ArgumentNullException(nameof(stock)),
+                config,
+                Math.Abs(recentTransientDelta) > 0d);
+            if (recoveryDecision.Eligible)
+            {
+                orderRecoveryDelta = recoveryDecision.Delta;
+            }
+        }
+
+        double delta = currentStockAdjustment + recentTransientDelta + orderRecoveryDelta;
         double currentValue = Clamp(previousValue + delta, config.LowMinimum, config.HighMaximum);
         FacilityDisorderSettlement settlement = new FacilityDisorderSettlement(
             windowStart,
@@ -125,13 +150,24 @@ public sealed class FacilityDisorderService
             currentValue,
             currentStockAdjustment,
             recentTransientDelta,
-            processed);
+            processed,
+            orderRecoveryDelta,
+            recoveryDecision.Result);
         State.IsInitialized = true;
         State.CurrentFacilityDisorder = currentValue;
         State.DisorderBand = ResolveBand(currentValue);
         State.LastProcessedAt = timestamp;
         State.LastSettlementAt = timestamp;
         State.LastSettlement = settlement;
+        if (orderRecoveryDelta < 0d)
+        {
+            State.LastRecoveryAt = timestamp;
+            State.QuietWindowStart = timestamp;
+        }
+        else if (!isInitialSettlement && Math.Abs(recentTransientDelta) > 0d)
+        {
+            State.QuietWindowStart = timestamp;
+        }
         settlementHistory.Add(settlement);
         TrimSettlementHistory();
         TrimEventStorage();
@@ -214,6 +250,7 @@ public sealed class FacilityDisorderService
 
         return FacilityDisorderBand.HIGH;
     }
+
 
     private static double Clamp(double value, double minimum, double maximum)
     {

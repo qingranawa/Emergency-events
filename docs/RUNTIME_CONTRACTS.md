@@ -96,7 +96,7 @@ PreviousFDI + NewEventDelta
 
 若上游 Evaluation、Snapshot、RoundId 或 CrisisAssessment 无效，FDI 保持原值，不消费 DisorderEvent，不推进 `LastProcessedAt` 或 `LastSettlementAt`；后续成功 PERIODIC 继续处理未消费窗口。
 
-FDI 当前没有最终的被动秩序恢复规则。高 FDI 在没有新负 Delta 时可能长期保持，`FDI ORDER RECOVERY: PENDING DESIGN`。
+FDI 已实现 State-Gated + Band-Aware Order Recovery。只有正常 PERIODIC、上游有效、没有普通事件 Delta、没有 Active Crisis、没有 Chaos/Hostile 存量且设施未 Destroyed 时，才在静默窗口结束后产生负 Recovery Delta。默认静默窗口为 90 秒，HIGH/MEDIUM/LOW 分别为 -2/-1/0；每次恢复或新的普通事件都会重新开始窗口。Recovery 不在 POST_MAJOR_WAVE 或 MANUAL 查询中运行，并以 `ORDER_RECOVERY_CHECK` 记录 Gate、窗口、普通 Delta、前后 FDI 和结果。
 
 ### FDI capacities
 

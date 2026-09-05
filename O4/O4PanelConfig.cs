@@ -21,8 +21,6 @@ public sealed class O4PanelConfig
 
     public int MaxCandidates { get; set; } = 2;
 
-    public bool AllowVoteChange { get; set; } = true;
-
     public bool ShowFdi { get; set; } = true;
 
     public bool ShowCrisis { get; set; } = true;

@@ -152,8 +152,8 @@ public sealed partial class Plugin
         }
 
         runtimeCoordinator.Disable();
-        SuspendEmergencyEventsForRound("AdminDisabled");
-        response = "EmergencyEvents 已禁用；插件 DLL 保持加载，本回合后续 EE 干预和调度已停止。";
+        DisableEmergencyEventsForCurrentRound();
+        response = "EmergencyEvents 已完全禁用；本回合 EE 状态已清理，后续按原版流程运行，下一回合继续保持禁用。";
         return true;
     }
 
@@ -168,7 +168,7 @@ public sealed partial class Plugin
         PrimaryWaveCaps caps = Config.PrimaryWaveCaps ?? new PrimaryWaveCaps();
         FacilityDisorderConfig disorder = Config.FacilityDisorder;
         O4.O4PanelConfig o4 = Config.O4Panel ?? new O4.O4PanelConfig();
-        response = $"【EmergencyEvents 配置】\nMinimumPlayers={Config.MinimumPlayers}\nWaveCaps：E{caps.E} D{caps.D} C{caps.C} B{caps.B} A{caps.A}\nTimer Extension：刷新方 +{Config.SpawningFactionTimerExtensionSeconds} 秒；另一方 +{Config.OpposingFactionTimerExtensionSeconds} 秒\nD-LRC：开始时间 {FormatSeconds(Config.DlrcEvaluatorStartTimeSeconds)}；周期 {Config.DlrcEvaluatorIntervalSeconds} 秒\n危机：CON 检查 {Config.CrisisContainmentCheckpointSeconds} 秒；END 激活={Config.CrisisEndActivationSeconds} 秒\nFDI：Enabled={disorder.Enabled}; InitialBase={disorder.InitialBase:0.##}; Lookback={disorder.InitialLookbackSeconds}s; SettlementHistoryCapacity={disorder.SettlementHistoryCapacity}; EventHistoryCapacity={disorder.EventHistoryCapacity}; Bands={disorder.LowMaximum:0.##}/{disorder.MediumMaximum:0.##}/{disorder.HighMinimum:0.##}\nO4：Enabled={o4.Enabled}; Refresh={o4.RefreshIntervalSeconds:0.##}s; Hint={o4.HintDurationSeconds:0.##}s; Vote={o4.VoteDurationSeconds}s; MaxCandidates={o4.MaxCandidates}; VoteChange={o4.AllowVoteChange}\n此命令只读，不支持 RA 修改配置。";
+        response = $"【EmergencyEvents 配置】\nMinimumPlayers={Config.MinimumPlayers}\nWaveCaps：E{caps.E} D{caps.D} C{caps.C} B{caps.B} A{caps.A}\nTimer Extension：刷新方 +{Config.SpawningFactionTimerExtensionSeconds} 秒；另一方 +{Config.OpposingFactionTimerExtensionSeconds} 秒\nD-LRC：开始时间 {FormatSeconds(Config.DlrcEvaluatorStartTimeSeconds)}；周期 {Config.DlrcEvaluatorIntervalSeconds} 秒\n危机：CON 检查 {Config.CrisisContainmentCheckpointSeconds} 秒；END 激活={Config.CrisisEndActivationSeconds} 秒\nFDI：Enabled={disorder.Enabled}; InitialBase={disorder.InitialBase:0.##}; Lookback={disorder.InitialLookbackSeconds}s; SettlementHistoryCapacity={disorder.SettlementHistoryCapacity}; EventHistoryCapacity={disorder.EventHistoryCapacity}; Bands={disorder.LowMaximum:0.##}/{disorder.MediumMaximum:0.##}/{disorder.HighMinimum:0.##}\nO4：Enabled={o4.Enabled}; Refresh={o4.RefreshIntervalSeconds:0.##}s; Hint={o4.HintDurationSeconds:0.##}s; Vote={o4.VoteDurationSeconds}s; MaxCandidates={o4.MaxCandidates}; VoteChange=Disabled\n此命令只读，不支持 RA 修改配置。";
         return true;
     }
 
@@ -219,7 +219,7 @@ public sealed partial class Plugin
     {
         O4PanelRuntimeService? panel = o4PanelService;
         string sessionId = panel?.SessionId ?? string.Empty;
-        return $"【M06 O4 COMMAND PANEL】\nEnabled：{FormatBoolean(panel is not null)}\nPanelRunning：{FormatBoolean(panel?.IsPanelRunning == true)}\nEligibleO4：{panel?.EligibleO4Count ?? 0}\nSelectionOpen：{FormatBoolean(panel?.IsSelectionOpen == true)}\nSessionId：{(string.IsNullOrEmpty(sessionId) ? "暂无" : sessionId)}\nCycleId：{(panel?.CycleId ?? 0L).ToString()}\nVotesReceived：{panel?.VotesReceived ?? 0}\nTimeRemaining：{panel?.TimeRemainingSeconds ?? 0}s\nPlayerInput：o4vote <1|2>（ClientCommandHandler）";
+        return $"【M06 O4 COMMAND PANEL】\nEnabled：{FormatBoolean(panel is not null)}\nPanelRunning：{FormatBoolean(panel?.IsPanelRunning == true)}\nEligibleO4：{panel?.EligibleO4Count ?? 0}\nSelectionOpen：{FormatBoolean(panel?.IsSelectionOpen == true)}\nSessionId：{(string.IsNullOrEmpty(sessionId) ? "暂无" : sessionId)}\nCycleId：{(panel?.CycleId ?? 0L).ToString()}\nVotesReceived：{panel?.VotesReceived ?? 0}\nTimeRemaining：{panel?.TimeRemainingSeconds ?? 0}s\nPlayerInput：o4vote <1|2>（ClientCommandHandler，PROVISIONAL/TBD）";
     }
 
     private bool TryFormatRound(out string response)
@@ -789,9 +789,13 @@ public sealed partial class Plugin
     {
         snapshot = dlrcEvaluatorService?.LastSnapshot;
         result = dlrcEvaluatorService?.LastResult;
-        if (snapshot is null || result is null)
+        if (snapshot is null
+            || result is null
+            || !result.IsValid
+            || snapshot.RoundId <= 0L
+            || result.RoundId != snapshot.RoundId)
         {
-            response = "D-LRC 尚未完成首次有效评估，当前没有可查询的战局快照。";
+            response = "D-LRC 当前没有可查询的有效战局快照。";
             return false;
         }
 
@@ -837,7 +841,6 @@ public sealed partial class Plugin
 
         builder.AppendLine($"{DlrcStageReportFormatter.FormatCrisisTag(detection.Tag)}");
         builder.AppendLine($"状态：{(detection.IsActive ? "激活" : "未激活")}");
-            builder.AppendLine($"状态：{(detection.IsActive ? "激活" : "未激活")}");
         builder.AppendLine("输入与阈值：");
         if (detection.Metrics.Count == 0)
         {
@@ -913,6 +916,11 @@ public sealed partial class Plugin
         if (!enabled)
         {
             return "INACTIVE";
+        }
+
+        if (runtimeCoordinator?.State == PluginRuntimeState.DISABLED)
+        {
+            return "DISABLED";
         }
 
         if (runtimeCoordinator?.State == PluginRuntimeState.LOW_POPULATION_SUSPENDED)

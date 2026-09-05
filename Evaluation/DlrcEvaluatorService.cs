@@ -543,6 +543,7 @@ public sealed class DlrcEvaluatorService
     {
         if (!hasScheduledHandle)
         {
+            NextScheduledEvaluationAt = null;
             return true;
         }
 

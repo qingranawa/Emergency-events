@@ -190,6 +190,11 @@ public sealed class FacilityDisorderService
         State.Reset();
     }
 
+    public void DisableForRound()
+    {
+        CleanupRound();
+    }
+
     private void TrimSettlementHistory()
     {
         int overflow = settlementHistory.Count - config.SettlementHistoryCapacity;

@@ -12,21 +12,21 @@
 
 ## 当前基线
 
-这是 commit `679c5c9` 的文档基线，不是永久 API 合同：
+这是当前 `main` 基线 `ce1000a` 加工作树修正的测试基线，不是永久 API 合同：
 
 - M01：3/3。
 - M02：25/25。
 - M03：43/43。
-- M04：32/32（其中包含 Balance Telemetry 运行观察测试）。
-- FDI：33/33（包含首次存量去重、失败恢复、Recovery 与资源边界测试）。
-- M05：46/46。
-- M06：29/29。
-- Total：211/211 PASS。
+- M04：37/37（其中包含 Balance Telemetry 运行观察、成熟波次、写入开关和 JSON 安全测试）。
+- FDI：34/34（包含首次存量去重、失败恢复、Recovery、资源边界和管理员禁用测试）。
+- M05：49/49（包含 Professional Commit 最新 Context 和成本失败回归）。
+- M06：当前设计修正后 31/31，RuntimeHarness 另行验证。
+- Total：当前修正后 222/222 PASS。
 - Release Build：PASS，Warnings=0，Errors=0。
 - Isolated Runtime：PASS。
 - Live Player Validation：PENDING。
 
-Balance Phase 2A 新增 Recovery 与 Telemetry 测试，覆盖静默窗口、Band、正向事件重置、危机/强敌/核毁 Gate、普通 Delta 互斥、回合清理、官方 Evaluation 只读采集、JSONL 隐私和长运行有界性。Telemetry 只作为 observer，真人回合数据仍需单独验证。
+Balance Phase 2A 新增 Recovery 与 Telemetry 测试，覆盖静默窗口、Band、正向事件重置、危机/强敌/核毁 Gate、普通 Delta 互斥、回合清理、官方 Evaluation 只读采集、JSONL 隐私、控制字符转义、成熟波次记录和长运行有界性。Telemetry 只作为 observer，真人回合数据仍需单独验证。
 
 M01 还包含 10,000 次 SCP-939 模拟：Double939Count=1042，TotalScpPerRound 始终为 3。
 
@@ -83,7 +83,7 @@ LocalAdmin 出现 `Command ee does not exist!` 通常表示命令发到了错误
 - `DIRECTOR_RUNTIME_PROBE`：验证 Scheduler/Context 解耦、显式周期、Event #2 DueAt、清理、低人口暂停、随机来源和生命周期边界。
 - `FDI_RUNTIME_PROBE`：验证事件生产、06:31 存量去重、30 秒增量、079/SYS、WAR/END 去重、无效评估恢复、长运行和清理。
 - `o4_panel_runtime_probe`：验证已加载 M06 Hint adapter 的渲染字段、紧凑状态与零 Production Definitions。
-- `o4_selection_runtime_probe`：验证合成二候选投票的多数、平票/无 O4 fallback、stale 绑定与取消清理。
+- `o4_selection_runtime_probe`：验证动态加入、离开失效、禁止改票、平票交回 M05、无 O4 跳过、单候选直选、stale 绑定与取消清理。
 
 RuntimeHarness 默认用于隔离验证，不代表真人 Gameplay。Probe 注入的是可控事实，不能证明真实 SCP 玩家击杀真实 MTF 时 EXILED death hook 一定会生成相同 DisorderEvent；同样不能证明真实客户端一定会看到 Hint 或能输入 `o4vote`。
 
@@ -97,4 +97,4 @@ RuntimeHarness 默认用于隔离验证，不代表真人 Gameplay。Probe 注�
 4. 重复事件、重复 Commit、重复 Episode 响应和有界容器。
 5. 真实 DLL 的隔离服加载与日志检查（若改动 Runtime Adapter）。
 
-自动化结果、构建结果、RuntimeHarness 结果和真人验证必须分开报告，不得用 175/175 PASS 声称真人平衡已完成。
+自动化结果、构建结果、RuntimeHarness 结果和真人验证必须分开报告，不得用自动化 PASS 声称真人 UI、输入 UX 或回合平衡已完成。

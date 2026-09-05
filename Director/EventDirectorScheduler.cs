@@ -30,9 +30,11 @@ public sealed class EventDirectorScheduler
         return true;
     }
 
-    public bool TryConsumeDueSlot(DateTime now)
+    public bool TryConsumeDueSlot(DateTime now, long? expectedCycleId = null)
     {
-        if (!SecondSlotDueAt.HasValue || now < SecondSlotDueAt.Value)
+        if (!SecondSlotDueAt.HasValue
+            || now < SecondSlotDueAt.Value
+            || expectedCycleId.HasValue && scheduledCycleId != expectedCycleId.Value)
         {
             return false;
         }

@@ -93,16 +93,16 @@ Round Start
 
 **NON_SUPPORT**：不读取 FDI，不参与普通 SUPPORT 来源抽取。
 
-**Must not do**：不重算上游状态，不实现 Event Pack 的枪械/装备/职业执行；M06 不可用时保留 M05 fallback。
+**Must not do**：不重算上游状态，不实现 Event Pack 的枪械/装备/职业执行；M06 不可用时不得自动替代 O4-required SUPPORT，当前支援机会由 M05 跳过并释放生命周期。
 
 ## M06 — O4 Panel
 
 **Purpose**：向在线 Spectator/Overwatch 展示单 Hint 状态面板，并仅对 M05 已经确定的 Foundation 多候选普通 SUPPORT shortlist 提供二选一人类选择层。
 
-**Inputs**：已完成的 D-LRC、CrisisAssessment、FDI band、M03 下一次排程时间，以及 M05 已排序、已合法化的两个候选和 fallback。
+**Inputs**：已完成的 D-LRC、CrisisAssessment、FDI band、M03 下一次排程时间，以及 M05 已排序、已合法化的最多两个候选。
 
-**Outputs**：只读 Hint、绑定 RoundId/CycleId/SessionId 的 `O4SelectionResult`、有界会话历史和只读 `ee o4 status`。
+**Outputs**：只读 Hint、绑定 RoundId/CycleId/SessionId 的 `O4SelectionResult`、有界会话历史和只读 `ee o4 status`。结果可以是多数赢家、TIE 候选集合、SKIPPED 或生命周期取消。
 
-**Must not do**：不生成/排序候选，不选择来源，不直接召唤或阻止 Chaos/GOI，不消费专业响应，不改变 M03 PERIODIC、M05 cadence 或 Event #2。无 O4、零票、平票、取消或失效时返回 M05 fallback。
+**Must not do**：不生成/排序候选，不选择来源，不直接召唤或阻止 Chaos/GOI，不消费专业响应，不改变 M03 PERIODIC、M05 cadence 或 Event #2。O4 选民资格必须动态读取；无 O4 时跳过当前 O4-required SUPPORT，平票候选交回 M05 既有系统规则裁决，单候选直接返回后仍由 M05 重验证。
 
 详细接口与运行时限制见 [O4 Panel](O4_PANEL.md)。

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using CommandSystem;
 using EmergencyEvents.Director;
 using EmergencyEvents.Disorder;
@@ -57,7 +58,7 @@ public sealed class O4PanelRuntimeHarnessCommand : ICommand
             && !Contains(normal, "Response Score", StringComparison.OrdinalIgnoreCase);
         bool selectionValid = Contains(selection, "Harness Alpha", StringComparison.Ordinal)
             && Contains(selection, "harness-beta", StringComparison.Ordinal)
-            && Contains(selection, "已投 2 / 5", StringComparison.Ordinal)
+            && Contains(selection, "已投 2", StringComparison.Ordinal)
             && selection.Split('\n').Length <= 7;
         bool compactStates = renderer.RenderSuspended().Split('\n').Length <= 2
             && renderer.RenderUnavailable().Split('\n').Length <= 2;
@@ -102,55 +103,102 @@ public sealed class O4SelectionRuntimeHarnessCommand : ICommand
             new O4PlayerSnapshot("O4-04", true, O4RoleState.Spectator),
         };
         O4VoteService majority = new O4VoteService(new O4PanelConfig());
-        bool opened = majority.TryOpenSession(request, voters, now, out _);
+        bool opened = majority.TryOpenSession(request, voters.Take(2).ToArray(), now, out _);
         bool voteOne = majority.TryCastVote(request.SessionId, "O4-01", 1, now.AddSeconds(1), true, out _, out _);
         bool voteTwo = majority.TryCastVote(request.SessionId, "O4-02", 1, now.AddSeconds(1), true, out _, out _);
-        bool voteThree = majority.TryCastVote(request.SessionId, "O4-03", 2, now.AddSeconds(1), true, out _, out _);
-        bool changedVote = majority.TryCastVote(request.SessionId, "O4-04", 1, now.AddSeconds(1), true, out _, out _);
+        bool joinVote = majority.TryCastVote(request.SessionId, "O4-03", 2, now.AddSeconds(5), true, out _, out _);
+        bool changedVote = majority.TryCastVote(request.SessionId, "O4-01", 2, now.AddSeconds(6), true, out _, out string changedReason);
         O4SelectionResult? winner = majority.ResolveActive(now.AddSeconds(20), voters);
 
+        O4VoteService leaving = new O4VoteService(new O4PanelConfig());
+        O4SelectionRequest leavingRequest = CreateRequest(96006, 2, "harness-o4-leave");
+        leaving.TryOpenSession(leavingRequest, voters.Take(2).ToArray(), now, out _);
+        leaving.TryCastVote(leavingRequest.SessionId, "O4-01", 1, now.AddSeconds(1), true, out _, out _);
+        leaving.TryCastVote(leavingRequest.SessionId, "O4-02", 2, now.AddSeconds(1), true, out _, out _);
+        O4PlayerSnapshot[] afterLeave =
+        {
+            voters[0],
+            new O4PlayerSnapshot("O4-02", true, O4RoleState.Alive),
+        };
+        O4SelectionResult? leaveResult = leaving.ResolveActive(now.AddSeconds(20), afterLeave);
+
         O4VoteService tie = new O4VoteService(new O4PanelConfig());
-        O4SelectionRequest tieRequest = CreateRequest(96006, 2, "harness-o4-2");
+        O4SelectionRequest tieRequest = CreateRequest(96006, 3, "harness-o4-tie");
         tie.TryOpenSession(tieRequest, voters, now, out _);
         tie.TryCastVote(tieRequest.SessionId, "O4-01", 1, now.AddSeconds(1), true, out _, out _);
         tie.TryCastVote(tieRequest.SessionId, "O4-02", 1, now.AddSeconds(1), true, out _, out _);
         tie.TryCastVote(tieRequest.SessionId, "O4-03", 2, now.AddSeconds(1), true, out _, out _);
         tie.TryCastVote(tieRequest.SessionId, "O4-04", 2, now.AddSeconds(1), true, out _, out _);
         O4SelectionResult? tieResult = tie.ResolveActive(now.AddSeconds(20), voters);
+        EventCandidate[] tiedCandidates =
+        {
+            CreateHarnessCandidate("harness-alpha", 2),
+            CreateHarnessCandidate("harness-beta", 1),
+        };
+        EventCandidate? tieWinner = new EventSelectionService(
+            new SupportSourceArbitrator(new EventDirectorConfig()))
+            .ResolveTiedCandidates(tiedCandidates, tieResult?.TiedCandidateIds ?? Array.Empty<string>());
 
         O4VoteService noO4 = new O4VoteService(new O4PanelConfig());
-        bool noO4Opened = noO4.TryOpenSession(CreateRequest(96006, 3, "harness-o4-3"), Array.Empty<O4PlayerSnapshot>(), now, out O4SelectionResult noO4Result);
+        bool noO4Opened = noO4.TryOpenSession(CreateRequest(96006, 4, "harness-o4-none"), Array.Empty<O4PlayerSnapshot>(), now, out O4SelectionResult noO4Result);
+        O4VoteService single = new O4VoteService(new O4PanelConfig());
+        bool singleOpened = single.TryOpenSession(CreateRequest(96006, 5, "harness-o4-single", 1), Array.Empty<O4PlayerSnapshot>(), now, out O4SelectionResult singleResult);
         O4SelectionResult stale = O4SelectionResult.ExplicitWinner(96006, 99, "harness-o4-stale", "harness-alpha", now);
         O4VoteService cancelled = new O4VoteService(new O4PanelConfig());
-        O4SelectionRequest cancelledRequest = CreateRequest(96006, 4, "harness-o4-4");
+        O4SelectionRequest cancelledRequest = CreateRequest(96006, 6, "harness-o4-cancel");
         cancelled.TryOpenSession(cancelledRequest, voters, now, out _);
         O4SelectionResult? cancelledResult = cancelled.CancelActive("RoundEnd", now.AddSeconds(2));
 
-        bool majorityPass = opened && voteOne && voteTwo && voteThree && changedVote
+        bool majorityPass = opened && voteOne && voteTwo && joinVote && !changedVote
+            && changedReason == "ALREADY_VOTED"
             && winner?.Outcome == O4SelectionOutcome.EXPLICIT_WINNER
             && winner.SelectedEventId == "harness-alpha"
-            && winner.EligibleVotes == 4;
-        bool tiePass = tieResult?.Outcome == O4SelectionOutcome.FALLBACK && tieResult.Reason == "TIE";
-        bool noO4Pass = !noO4Opened && noO4Result.Outcome == O4SelectionOutcome.FALLBACK && noO4Result.Reason == "NO_O4_AVAILABLE";
+            && winner.EligibleVotes == 3;
+        bool leavePass = leaveResult?.SelectedEventId == "harness-alpha" && leaveResult.EligibleVotes == 1;
+        bool tiePass = tieResult?.Outcome == O4SelectionOutcome.TIE
+            && tieResult.Reason == "TIE"
+            && tieWinner?.Definition.EventId == "harness-alpha";
+        bool noO4Pass = !noO4Opened && noO4Result.Outcome == O4SelectionOutcome.SKIPPED && noO4Result.Reason == "NO_O4_AVAILABLE";
+        bool singlePass = !singleOpened
+            && singleResult.Outcome == O4SelectionOutcome.EXPLICIT_WINNER
+            && singleResult.SelectedEventId == "harness-alpha";
         bool stalePass = !stale.MatchesBinding(96006, 4, "harness-o4-4");
         bool cleanupPass = cancelledResult?.Outcome == O4SelectionOutcome.CANCELLED && cancelled.ActiveSession is null;
-        bool passed = majorityPass && tiePass && noO4Pass && stalePass && cleanupPass;
-        response = $"{(passed ? "PASS" : "FAIL")} O4_SELECTION_RUNTIME_PROBE\nSYNTHETIC_ONLY ProductionDefinitions=0;Candidates=2\nMAJORITY Opened={opened};Winner={winner?.SelectedEventId};EligibleVotes={winner?.EligibleVotes}\nTIE Outcome={tieResult?.Outcome};Reason={tieResult?.Reason}\nNO_O4 Opened={noO4Opened};Reason={noO4Result.Reason}\nSTALE Rejected={stalePass}\nCLEANUP Cancelled={cleanupPass};ActiveSession={cancelled.ActiveSession is not null}";
+        bool passed = majorityPass && leavePass && tiePass && noO4Pass && singlePass && stalePass && cleanupPass;
+        response = $"{(passed ? "PASS" : "FAIL")} O4_SELECTION_RUNTIME_PROBE\nSYNTHETIC_ONLY ProductionDefinitions=0;Candidates=2\nDYNAMIC_JOIN Accepted={joinVote};LateVoteCount={winner?.EligibleVotes};SecondVoteRejected={!changedVote};Reason={changedReason}\nLEAVE_INVALIDATED Winner={leaveResult?.SelectedEventId};EligibleVotes={leaveResult?.EligibleVotes}\nTIE Outcome={tieResult?.Outcome};Reason={tieResult?.Reason};M05Winner={tieWinner?.Definition.EventId}\nNO_O4 Outcome={noO4Result.Outcome};Reason={noO4Result.Reason}\nSINGLE Opened={singleOpened};Selected={singleResult.SelectedEventId}\nSTALE Rejected={stalePass}\nCLEANUP Cancelled={cleanupPass};ActiveSession={cancelled.ActiveSession is not null}";
         return passed;
     }
 
-    private static O4SelectionRequest CreateRequest(long roundId, long cycleId, string sessionId)
+    private static EventCandidate CreateHarnessCandidate(string eventId, int priority)
     {
+        EventDefinition definition = new EventDefinition(
+            eventId,
+            eventId,
+            EventCategory.Support,
+            EventSource.Foundation,
+            EventResponseLevel.L0,
+            Array.Empty<Crisis.CrisisTag>(),
+            TierPersonnelPlan.Uniform(1),
+            TierPersonnelPlan.Uniform(1),
+            isEnabled: true,
+            priority: priority,
+            weight: 1d,
+            requiresUndergroundFacility: false);
+        return new EventCandidate(definition, true, "HarnessEligible", 1, 1, 1, 1);
+    }
+
+    private static O4SelectionRequest CreateRequest(long roundId, long cycleId, string sessionId, int candidateCount = 2)
+    {
+        O4CandidateView[] candidates =
+        {
+            new O4CandidateView("harness-alpha", "Harness Alpha", EventCategory.Support, EventSource.Foundation, false),
+            new O4CandidateView("harness-beta", "Harness Beta", EventCategory.Support, EventSource.Foundation, false),
+        };
         return new O4SelectionRequest(
             roundId,
             cycleId,
             sessionId,
             DateTime.UtcNow,
-            new[]
-            {
-                new O4CandidateView("harness-alpha", "Harness Alpha", EventCategory.Support, EventSource.Foundation, false),
-                new O4CandidateView("harness-beta", "Harness Beta", EventCategory.Support, EventSource.Foundation, false),
-            },
-            "harness-alpha");
+            candidates.Take(candidateCount).ToArray());
     }
 }

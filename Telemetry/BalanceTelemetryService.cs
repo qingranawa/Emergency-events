@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using EmergencyEvents.Crisis;
 using EmergencyEvents.Disorder;
 using EmergencyEvents.Evaluation;
@@ -32,8 +33,10 @@ public sealed class BalanceTelemetryService
     private double initialFdi;
     private double minFdi;
     private double maxFdi;
+    private bool hasFdiSample;
     private int recoveryCount;
     private double recoveryTotal;
+    private int spectatorWaitSampleCount;
     private int? lastPeriodicFinalLevel;
     private int? lastPeriodicTheoreticalLevel;
 
@@ -53,6 +56,8 @@ public sealed class BalanceTelemetryService
     public int CurrentEvaluationSamples => samples.Count(sample => sample.RecordType == "DLRC_EVALUATION");
 
     public int CurrentSpectatorWaitSamples => waitSamples.Count;
+
+    public int CurrentFdiSampleCount => fdiSamples.Count;
 
     public string? LastWriteError { get; private set; }
 
@@ -108,14 +113,20 @@ public sealed class BalanceTelemetryService
         maxTheoreticalLevel = Math.Max(maxTheoreticalLevel, result.TheoreticalLevel);
         peakOnline = Math.Max(peakOnline, snapshot.CurrentOnlinePlayers);
         minimumOnline = Math.Min(minimumOnline, snapshot.CurrentOnlinePlayers);
-        fdiSamples.Add(fdi);
-        if (fdiSamples.Count == 1)
+        double safeFdi = IsFinite(fdi) ? Math.Max(0d, Math.Min(100d, fdi)) : 0d;
+        AddMetricSample(fdiSamples, safeFdi);
+        if (!hasFdiSample)
         {
-            initialFdi = fdi;
+            initialFdi = safeFdi;
+            minFdi = safeFdi;
+            maxFdi = safeFdi;
+            hasFdiSample = true;
         }
-
-        minFdi = fdiSamples.Min();
-        maxFdi = fdiSamples.Max();
+        else
+        {
+            minFdi = Math.Min(minFdi, safeFdi);
+            maxFdi = Math.Max(maxFdi, safeFdi);
+        }
         if (completedEvent.Trigger == DlrcEvaluationTrigger.PERIODIC)
         {
             AddLevelDuration(completedEvent.Snapshot.Timestamp);
@@ -135,7 +146,8 @@ public sealed class BalanceTelemetryService
         double safeWait = Math.Max(0d, waitSeconds);
         if (!isCensored)
         {
-            waitSamples.Add(safeWait);
+            AddMetricSample(waitSamples, safeWait);
+            spectatorWaitSampleCount++;
         }
 
         Record("SPECTATOR_WAIT", roundId, DateTime.UtcNow, new Dictionary<string, string>
@@ -188,6 +200,29 @@ public sealed class BalanceTelemetryService
         });
     }
 
+    public void RecordWaveMaturity(long roundId, MajorWaveRecord record)
+    {
+        if (!Enabled
+            || !config.WriteWaveRecords
+            || record is null
+            || !record.IsSurvivalObservationComplete
+            || !record.SurvivalObservedAt.HasValue)
+        {
+            return;
+        }
+
+        Record("PRIMARY_WAVE_MATURED", roundId, record.SurvivalObservedAt.Value, new Dictionary<string, string>
+        {
+            ["waveId"] = record.WaveId,
+            ["faction"] = record.Faction,
+            ["startedAt"] = record.StartedAt.ToString("O"),
+            ["completedAt"] = record.CompletedAt.ToString("O"),
+            ["actualSpawned"] = record.ActualSpawnedCount.ToString(CultureInfo.InvariantCulture),
+            ["matureAt"] = record.SurvivalObservedAt.Value.ToString("O"),
+            ["survivalCount120s"] = record.SurvivingCountAtObservation.ToString(CultureInfo.InvariantCulture),
+        });
+    }
+
     public void RecordCrisis(CrisisAssessment assessment)
     {
         if (!Enabled || assessment is null)
@@ -219,7 +254,7 @@ public sealed class BalanceTelemetryService
 
     public void CompleteRound(long roundId, DateTime timestamp, string? lockedTier, int startingPopulation)
     {
-        if (!Enabled || !config.WriteRoundSummary)
+        if (!Enabled || !config.WriteRoundSummary || !config.FlushOnRoundEnd)
         {
             ClearRound();
             return;
@@ -245,7 +280,7 @@ public sealed class BalanceTelemetryService
             ["recoveryAppliedCount"] = recoveryCount.ToString(CultureInfo.InvariantCulture),
             ["recoveryTotalDelta"] = recoveryTotal.ToString("0.####", CultureInfo.InvariantCulture),
             ["evaluationSamples"] = CurrentEvaluationSamples.ToString(CultureInfo.InvariantCulture),
-            ["waitSamples"] = waitSamples.Count.ToString(CultureInfo.InvariantCulture),
+            ["waitSamples"] = spectatorWaitSampleCount.ToString(CultureInfo.InvariantCulture),
             ["waitMeanSeconds"] = FormatNullable(waitMean),
             ["waitMedianSeconds"] = FormatNullable(waitMedian),
             ["waitP90Seconds"] = FormatNullable(waitP90),
@@ -273,8 +308,10 @@ public sealed class BalanceTelemetryService
         initialFdi = 0d;
         minFdi = 0d;
         maxFdi = 0d;
+        hasFdiSample = false;
         recoveryCount = 0;
         recoveryTotal = 0d;
+        spectatorWaitSampleCount = 0;
         finalLevelSeconds.Clear();
         theoreticalLevelSeconds.Clear();
         lastPeriodicFinalLevel = null;
@@ -342,6 +379,15 @@ public sealed class BalanceTelemetryService
         durations[level] = durations.TryGetValue(level, out double current) ? current + seconds : seconds;
     }
 
+    private void AddMetricSample(List<double> samples, double value)
+    {
+        samples.Add(value);
+        while (samples.Count > config.RecentRecordCapacity)
+        {
+            samples.RemoveAt(0);
+        }
+    }
+
     private static string GetDuration(Dictionary<int, double> durations, int level)
     {
         return durations.TryGetValue(level, out double value) ? value.ToString("0.###", CultureInfo.InvariantCulture) : "0";
@@ -371,10 +417,53 @@ public sealed class BalanceTelemetryService
 
     private static string Escape(string value)
     {
-        return value.Replace("\\", "\\\\")
-            .Replace("\"", "\\\"")
-            .Replace("\r", "\\r")
-            .Replace("\n", "\\n");
+        StringBuilder builder = new StringBuilder(value.Length);
+        foreach (char character in value)
+        {
+            switch (character)
+            {
+                case '\\':
+                    builder.Append("\\\\");
+                    break;
+                case '"':
+                    builder.Append("\\\"");
+                    break;
+                case '\b':
+                    builder.Append("\\b");
+                    break;
+                case '\f':
+                    builder.Append("\\f");
+                    break;
+                case '\n':
+                    builder.Append("\\n");
+                    break;
+                case '\r':
+                    builder.Append("\\r");
+                    break;
+                case '\t':
+                    builder.Append("\\t");
+                    break;
+                default:
+                    if (character < ' ')
+                    {
+                        builder.Append("\\u");
+                        builder.Append(((int)character).ToString("x4", CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        builder.Append(character);
+                    }
+
+                    break;
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsFinite(double value)
+    {
+        return !double.IsNaN(value) && !double.IsInfinity(value);
     }
 
     private sealed class TelemetrySample

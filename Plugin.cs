@@ -125,6 +125,7 @@ public sealed partial class Plugin : Plugin<Config>
             Config.MinimumPlayers);
         balanceTelemetryService = new BalanceTelemetryService(Config.BalanceTelemetry, Path.Combine(Paths.Plugins, "EmergencyEvents", "telemetry"));
         reinforcementManager.MajorWaveCompleted += OnMajorWaveCompleted;
+        reinforcementManager.MajorWaveSurvivalObserved += OnMajorWaveSurvivalObserved;
         dlrcEvaluatorService.EvaluationCompleted += OnDlrcEvaluationCompleted;
 
         ServerEvents.WaitingForPlayers += OnWaitingForPlayers;
@@ -183,6 +184,7 @@ public sealed partial class Plugin : Plugin<Config>
         if (reinforcementManager is not null)
         {
             reinforcementManager.MajorWaveCompleted -= OnMajorWaveCompleted;
+            reinforcementManager.MajorWaveSurvivalObserved -= OnMajorWaveSurvivalObserved;
         }
         reinforcementManager?.Dispose();
         reinforcementManager = null;
@@ -240,6 +242,7 @@ public sealed partial class Plugin : Plugin<Config>
 
         roundCoreManager?.CaptureRoundStart();
         long roundId = roundCoreManager?.State?.RoundId ?? 0;
+        crisisManager?.StartRound(roundId);
         reinforcementManager?.StartRound(
             roundId,
             roundCoreManager?.State?.Resolution.Tier ?? PopulationTier.E);
@@ -342,6 +345,14 @@ public sealed partial class Plugin : Plugin<Config>
         }
     }
 
+    private void OnMajorWaveSurvivalObserved(MajorWaveRecord record)
+    {
+        if (reinforcementManager?.State?.RoundId is long currentRoundId)
+        {
+            balanceTelemetryService?.RecordWaveMaturity(currentRoundId, record);
+        }
+    }
+
     private bool IsEmergencyEventsActiveForRound()
     {
         return runtimeCoordinator?.IsEmergencyEventsActiveForRound == true;
@@ -371,6 +382,19 @@ public sealed partial class Plugin : Plugin<Config>
         o4PanelService?.SuspendForRound(reason);
         Log.Info(
             $"[EmergencyEvents][Activation] RuntimeState={runtimeCoordinator?.State}; CurrentPlayers={runtimeCoordinator?.CurrentPopulation ?? 0}; MinimumPlayers={runtimeCoordinator?.MinimumPlayers ?? 0}; Decision={runtimeCoordinator?.State}; Reason={reason}");
+    }
+
+    private void DisableEmergencyEventsForCurrentRound()
+    {
+        CompleteBalanceTelemetryRound();
+        dlrcEvaluatorService?.CleanupRound("AdminDisabled");
+        eventDirectorManager?.CleanupRound();
+        o4PanelService?.CleanupRound("AdminDisabled");
+        crisisManager?.CleanupRound();
+        facilityDisorderManager?.DisableForRound();
+        reinforcementManager?.CleanupRound();
+        roundCoreManager?.CleanupRound();
+        Log.Info("[EmergencyEvents][Activation] Current round state cleared; subsequent gameplay uses vanilla handlers.");
     }
 
     private void LogActivationDecision(int currentPlayers, string reason)

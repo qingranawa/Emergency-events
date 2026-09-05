@@ -37,9 +37,9 @@ GOI Detector 使用 `HostileThirdPartyActive`、战斗人数、D-LRC FinalLevel 
 
 ## M06 O4 Panel
 
-M06 核心面板与二选一选择层已实现：Spectator/Overwatch 单 Hint、真实客户端 `o4vote` 输入、M05 shortlist/fallback 边界、有界会话和生命周期清理。它不包含 GUI/canvas、正式 Event Pack 或对事件执行器的控制。
+M06 核心面板与二选一选择层已实现：动态 Spectator/Overwatch 资格、单 Hint、临时真实客户端 `o4vote` 输入、M05 shortlist/TIE/NO_O4 边界、有界会话和生命周期清理。它不包含 GUI/canvas、正式 Event Pack 或对事件执行器的控制。
 
-仍待真人验证：真实客户端 Hint 视觉位置与刷新体验、客户端命令可达性、观察者断线/复活期间的投票资格变化，以及实服日志中的选择/回退生命周期。M05 的 `HasO4Selector=false` 在 M06 禁用、无 O4 或不可用时仍是合法状态。
+仍待真人验证：真实客户端 Hint 视觉位置与刷新体验、客户端命令可达性、观察者断线/复活期间的投票资格变化、动态加入的真实角色转换、投票数量呈现、VoteDuration/HintDuration 调优，以及实服日志中的选择/跳过生命周期。VoteDuration 默认 20 秒、Refresh 默认 1 秒、Hint 默认 1.3 秒均为 provisional。M05 的 `HasO4Selector=false` 在 M06 禁用、低人口暂停或运行时不可用时仍是合法状态；O4-required SUPPORT 没有合法 O4 时跳过当前支援机会。
 
 ## 设计变更规则
 

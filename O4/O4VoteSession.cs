@@ -11,16 +11,13 @@ namespace EmergencyEvents.O4;
 public sealed class O4VoteSession
 {
     private readonly O4SelectionRequest request;
-    private readonly HashSet<string> eligibleO4Ids;
     private readonly Dictionary<string, int> votes = new Dictionary<string, int>(StringComparer.Ordinal);
     private O4SelectionResult? terminalResult;
 
     public O4VoteSession(
         O4SelectionRequest request,
-        IEnumerable<O4PlayerSnapshot> eligibleO4,
         DateTime startedAt,
-        DateTime endsAt,
-        bool allowVoteChange)
+        DateTime endsAt)
     {
         this.request = request ?? throw new ArgumentNullException(nameof(request));
         if (endsAt <= startedAt)
@@ -33,14 +30,8 @@ public sealed class O4VoteSession
         SessionId = request.SessionId;
         StartedAt = startedAt;
         EndsAt = endsAt;
-        AllowVoteChange = allowVoteChange;
         CandidateIds = new ReadOnlyCollection<string>(
             request.Candidates.Select(candidate => candidate.EventId).ToArray());
-        eligibleO4Ids = new HashSet<string>(
-            (eligibleO4 ?? Array.Empty<O4PlayerSnapshot>())
-                .Where(O4EligibilityPolicy.IsEligible)
-                .Select(player => player.RoundLocalO4Id),
-            StringComparer.Ordinal);
         State = O4VoteSessionState.CREATED;
     }
 
@@ -54,11 +45,7 @@ public sealed class O4VoteSession
 
     public DateTime EndsAt { get; }
 
-    public bool AllowVoteChange { get; }
-
     public IReadOnlyList<string> CandidateIds { get; }
-
-    public IReadOnlyCollection<string> EligibleO4Ids => eligibleO4Ids;
 
     public IReadOnlyDictionary<string, int> Votes => new ReadOnlyDictionary<string, int>(votes);
 
@@ -101,7 +88,7 @@ public sealed class O4VoteSession
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(voterId) || !eligibleO4Ids.Contains(voterId) || !isCurrentlyEligible)
+        if (string.IsNullOrWhiteSpace(voterId) || !isCurrentlyEligible)
         {
             reason = "O4_NOT_ELIGIBLE";
             return false;
@@ -113,25 +100,14 @@ public sealed class O4VoteSession
             return false;
         }
 
-        if (votes.TryGetValue(voterId, out int previousIndex))
+        if (votes.ContainsKey(voterId))
         {
-            if (previousIndex == candidateIndex)
-            {
-                reason = "UNCHANGED";
-                return true;
-            }
-
-            if (!AllowVoteChange)
-            {
-                reason = "VOTE_CHANGE_DISABLED";
-                return false;
-            }
-
-            changedVote = true;
+            reason = "ALREADY_VOTED";
+            return false;
         }
 
         votes[voterId] = candidateIndex;
-        reason = changedVote ? "CHANGED" : "CAST";
+        reason = "CAST";
         return true;
     }
 
@@ -174,16 +150,26 @@ public sealed class O4VoteSession
         bool hasTie = highest > 0 && counts.Count(count => count == highest) > 1;
         if (highest == 0 || hasTie)
         {
-            State = O4VoteSessionState.EXPIRED;
-            terminalResult = O4SelectionResult.Fallback(
-                RoundId,
-                CycleId,
-                SessionId,
-                highest == 0 ? "NO_VOTE" : "TIE",
-                at,
-                counts,
-                eligibleVotes,
-                votes.Count);
+            State = O4VoteSessionState.RESOLVED;
+            terminalResult = hasTie
+                ? O4SelectionResult.Tie(
+                    RoundId,
+                    CycleId,
+                    SessionId,
+                    at,
+                    CandidateIds.Where((_, index) => counts[index] == highest).ToArray(),
+                    counts,
+                    eligibleVotes,
+                    votes.Count)
+                : O4SelectionResult.Fallback(
+                    RoundId,
+                    CycleId,
+                    SessionId,
+                    "NO_VOTE",
+                    at,
+                    counts,
+                    eligibleVotes,
+                    votes.Count);
             return terminalResult;
         }
 

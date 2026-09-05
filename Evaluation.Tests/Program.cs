@@ -109,6 +109,7 @@ internal static class Program
             ("GOI 只使用未来注册钩子与基金会劣势条件", GoiRequiresRegisteredHostileThirdParty),
             ("CrisisManager 与 Module03 完成事件契约已发布", CrisisManagerContractsArePublished),
             ("CrisisManager 固定排序且保持 Global D-LRC 独立", CrisisManagerBuildsStableAssessment),
+            ("CrisisManager 拒绝不属于当前回合的评估", CrisisManagerRejectsStaleRound),
             ("RA 命令语法精确识别 D-LRC 子命令", EmergencyEventsCommandSyntaxRecognizesDlrcEvaluate),
             ("RA 状态报告包含人口、响应、危机与积分", DlrcStateReportContainsRequiredFacts),
             ("低人口暂停在本回合不可逆并在下一局重新判定", LowPopulationSuspensionIsRoundLocked),
@@ -156,8 +157,13 @@ internal static class Program
             ("FDI Order Recovery 被危机和强敌状态阻断", FdiOrderRecoveryRespectsStateGates),
             ("FDI Order Recovery 与普通负 Delta 不叠加", FdiOrderRecoveryDoesNotStackWithOrdinaryDelta),
             ("FDI Order Recovery Round cleanup 清除时间状态", FdiOrderRecoveryCleanupClearsState),
+            ("FDI 管理员禁用在正常人口下也会停止回合状态", FdiDisableStopsAtNormalPopulation),
             ("Balance Telemetry 只记录官方结果并输出 JSONL", BalanceTelemetryWritesOfficialEvaluation),
             ("Balance Telemetry 2000 次评估后保持有界", BalanceTelemetryRemainsBoundedAfterLongRun),
+            ("Balance Telemetry 指标样本保持有界", BalanceTelemetryMetricSamplesRemainBounded),
+            ("Balance Telemetry 正确转义 JSON 控制字符", BalanceTelemetryEscapesJsonControlCharacters),
+            ("Balance Telemetry 记录波次 120 秒成熟事实", BalanceTelemetryRecordsWaveMaturity),
+            ("Balance Telemetry 遵守回合结束写入开关", BalanceTelemetryHonorsRoundEndFlushOption),
             ("M05 EventDefinition 只声明一个 L0-L5 响应等级", DirectorDefinitionDeclaresOneResponseLevel),
             ("M05 多危机标签按 AND 条件保存", DirectorDefinitionPreservesCrisisAndRequirements),
             ("M05 人员计划按人口档位可读", DirectorDefinitionExposesTierPersonnelPlan),
@@ -175,7 +181,7 @@ internal static class Program
             ("M05 专业危机响应优先于普通来源仲裁", DirectorProfessionalCandidateHasPriority),
             ("M05 没有合法候选的 Chaos 来源被移除", DirectorArbitrationRemovesIllegalSource),
             ("M05 单一普通候选直接选择", DirectorSingleCandidateSelectsDirectly),
-            ("M05 Foundation 多候选要求 O4 且保留回退", DirectorFoundationSelectionRequiresO4WithFallback),
+            ("M05 Foundation 多候选要求 O4 且禁止自动替代", DirectorFoundationSelectionRequiresO4WithFallback),
             ("M05 Chaos 和 GOI 候选自动选择", DirectorChaosAndGoiSelectAutomatically),
             ("M05 FDI 只影响普通 SUPPORT 来源仲裁", DirectorFdiOnlyInfluencesSupportArbitration),
             ("M05 NON_SUPPORT 不读取 FDI", DirectorNonSupportIgnoresFdi),
@@ -198,11 +204,14 @@ internal static class Program
              ("M05 PERIODIC/POST/MANUAL 只更新 Context 不创建周期", DirectorEvaluationTriggersOnlyUpdateContext),
              ("M05 显式测试触发只创建一个周期", DirectorExplicitTriggerCreatesOneCycle),
              ("M05 完成周期后允许下一周期且日志有界", DirectorCompletedCyclesHaveBoundedHistory),
+             ("M05 完成带第二槽位周期时清理旧调度", DirectorCompletedSupportCycleClearsSecondSlot),
              ("M05 多危机专业选择标记临时策略", DirectorProfessionalSelectionIsProvisional),
              ("M05 DueAt 取消后永不迟到执行", DirectorDueAtCancellationIsIrreversible),
              ("M05 第二槽位到期只执行一次", DirectorSecondSlotExecutesOnlyOnce),
              ("M05 来源仲裁 Seed 可重复", DirectorSeededSourceSelectionIsReproducible),
              ("M05 来源权重非法值安全回退", DirectorInvalidSourceWeightsUseStableFallback),
+             ("M05 Professional Commit 成本失败不得消费响应", DirectorProfessionalCommitFailureDoesNotConsume),
+             ("M05 Professional Commit 缺少最新 Context 时拒绝", DirectorProfessionalCommitRequiresLatestContext),
              ("M04/M03 Chaos 波次不应计入 Foundation 收容失败", ChaosWaveDoesNotCountAsFoundationFailure),
              ("M05 Rollback 后必须释放忙状态", DirectorRollbackReleasesBusyState),
             ("M06 配置值被安全限制且不伪造 Anchor", M06ConfigSanitizesValues),
@@ -214,23 +223,25 @@ internal static class Program
             ("M06 选择面板只展示 M05 候选字段", M06SelectionPanelUsesCandidateFields),
             ("M06 Vote Session 绑定回合周期和会话", M06VoteSessionBindsRuntimeIdentity),
             ("M06 多数票选择唯一候选", M06VoteSessionResolvesMajority),
-            ("M06 平票回退 M05", M06VoteSessionTieFallsBack),
-            ("M06 零票回退 M05", M06VoteSessionNoVoteFallsBack),
-            ("M06 无 O4 立即回退且不创建会话", M06NoO4FallsBackImmediately),
+            ("M06 平票交回 M05 系统裁决", M06VoteSessionTieReturnsTiedCandidates),
+            ("M06 零票立即结束且不伪造选择", M06VoteSessionNoVoteEndsWithoutSelection),
+            ("M06 无 O4 跳过 O4 支援机会", M06NoO4SkipsSupportOpportunity),
             ("M06 单一候选不创建投票", M06SingleCandidateSkipsVote),
-            ("M06 改票只保留一个投票人", M06VoteChangeKeepsOneVoter),
-            ("M06 重复投票不增加计数", M06RepeatedVoteDoesNotDuplicate),
-            ("M06 非 O4 和中途加入者不能投当前会话", M06RejectsNonO4AndNewJoiner),
+            ("M06 投票后禁止改票", M06VoteChangeIsRejected),
+            ("M06 重复投票被拒绝且不增加计数", M06RepeatedVoteIsRejected),
+            ("M06 非 O4 被拒绝且新 O4 可加入当前会话", M06RejectsNonO4AndAllowsNewJoiner),
             ("M06 过期会话拒绝投票", M06ExpiredSessionRejectsVote),
             ("M06 SelectionResult 校验回合周期会话", M06SelectionResultRejectsStaleBinding),
             ("M06 失去资格的投票不计入最终结果", M06DisconnectedVoteIsIgnored),
             ("M06 清理会话只产生一次取消结果", M06CleanupCancelsSessionOnce),
             ("M06 RA 语法只提供 O4 状态查询", M06RaSyntaxRecognizesStatus),
             ("M06 M05 多候选只请求一次 Selector", M06M05RequestsSelectorOnce),
+            ("M06 平票由 M05 在候选集合内裁决", M06M05ResolvesTieAmongCandidates),
             ("M06 M05 清理会取消未决选择", M06M05CleanupCancelsPendingSelection),
             ("M06 过期 Selector 结果不会污染当前周期", M06M05IgnoresStaleSelection),
-            ("M06 选择结果后 M05 仍执行最终重验证", M06M05RevalidatesAfterSelection),
-            ("M06 Selector 不可用时保留 M05 回退", M06M05PreservesFallbackWhenUnavailable),
+             ("M06 选择结果后 M05 仍执行最终重验证", M06M05RevalidatesAfterSelection),
+             ("M06 Selector 不可用时跳过 O4 支援机会", M06M05SkipsSupportWhenUnavailable),
+             ("M06 O4 取消不得隐式回退 Support", M06CancellationDoesNotFallbackSupport),
             ("M06 专业响应投票不提前消费", M06ProfessionalVoteDoesNotConsume),
             ("M06 长运行会话结果保持有界", M06LongRunHistoryRemainsBounded),
             ("M06 暂停和错误面板保持单块输出", M06SuspendedAndUnavailablePanelsAreCompact),
@@ -634,6 +645,28 @@ internal static class Program
         AssertTrue(ReferenceEquals(assessment, retained), "上游无效评估不得覆盖上一份有效 CrisisAssessment");
         manager.CleanupRound();
         AssertTrue(manager.CurrentCrisisAssessment is null, "Round Cleanup 必须清空 CrisisAssessment");
+    }
+
+    private static void CrisisManagerRejectsStaleRound()
+    {
+        CrisisManager manager = new CrisisManager();
+        manager.StartRound(92001);
+        RoundSnapshot staleSnapshot = CreateSnapshot(roundId: 92002);
+        DlrcEvaluationResult staleResult = CreateCrisisResult(staleSnapshot, 0, FoundationStrength.STRONG);
+        CrisisAssessment? staleAssessment = manager.Evaluate(new DlrcEvaluationCompletedEvent(
+            1,
+            DlrcEvaluationTrigger.PERIODIC,
+            staleSnapshot,
+            staleResult));
+
+        AssertTrue(staleAssessment is null, "当前回合之外的评估不得污染 CrisisManager");
+        manager.StartRound(92002);
+        CrisisAssessment? currentAssessment = manager.Evaluate(new DlrcEvaluationCompletedEvent(
+            1,
+            DlrcEvaluationTrigger.PERIODIC,
+            staleSnapshot,
+            staleResult));
+        AssertTrue(currentAssessment is not null, "切换到对应回合后评估必须可以正常处理");
     }
 
     private static void EmergencyEventsCommandSyntaxRecognizesDlrcEvaluate()
@@ -1201,6 +1234,25 @@ internal static class Program
         AssertTrue(config.LowMaximum > config.LowMinimum && config.HighMinimum > config.MediumMaximum, "FDI 区间边界必须可配置");
     }
 
+    private static void FdiDisableStopsAtNormalPopulation()
+    {
+        FacilityDisorderService service = new FacilityDisorderService();
+        service.StartRound(Utc(6, 30), 16, 96001);
+        AssertTrue(service.State.IsActive, "正常人口开局的 FDI 必须先处于 active");
+        AssertTrue(service.Record(new DisorderEvent(
+            "disable-test-event",
+            Utc(6, 31),
+            DisorderEventCategory.CombatDeath,
+            2d)), "禁用前测试事件必须能够记录");
+
+        service.DisableForRound();
+
+        AssertTrue(!service.State.IsActive, "管理员禁用必须停止 FDI active 状态");
+        AssertTrue(!service.State.IsInitialized, "管理员禁用必须清除 FDI 初始化状态");
+        AssertEqual(0, service.Events.Count, "管理员禁用不得保留本回合 FDI 事件");
+        AssertEqual(0, service.History.Count, "管理员禁用不得保留本回合 FDI 历史");
+    }
+
     private static void FdiCommandSyntaxRecognizesCommands()
     {
         (string[] Arguments, EmergencyEventsCommandKind Expected)[] commands =
@@ -1602,6 +1654,84 @@ internal static class Program
         }
         AssertEqual(64, telemetry.CurrentRecordCount, "Telemetry 最近记录必须有界");
         AssertEqual(64, telemetry.CurrentEvaluationSamples, "Telemetry 内存样本计数也必须有界");
+    }
+
+    private static void BalanceTelemetryMetricSamplesRemainBounded()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "EmergencyEventsTelemetryMetrics-" + Guid.NewGuid().ToString("N"));
+        BalanceTelemetryService telemetry = new BalanceTelemetryService(
+            new BalanceTelemetryConfig { RecentRecordCapacity = 64 },
+            directory);
+        telemetry.StartRound(903, Utc(6, 31), 16);
+
+        for (int index = 0; index < 256; index++)
+        {
+            DateTime timestamp = Utc(6, 31).AddSeconds(index);
+            RoundSnapshot snapshot = CreateSnapshot(roundId: 903, timestamp: timestamp);
+            DlrcEvaluationResult result = CreateResult(snapshot);
+            CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result);
+            telemetry.RecordEvaluation(
+                new DlrcEvaluationCompletedEvent(index + 1, DlrcEvaluationTrigger.PERIODIC, snapshot, result),
+                assessment,
+                index % 100,
+                FacilityDisorderBand.MEDIUM,
+                "PROVISIONAL_NORMAL");
+            telemetry.RecordSpectatorWait(903, "S-01", index, "Foundation", isCensored: false);
+        }
+
+        AssertEqual(64, telemetry.CurrentFdiSampleCount, "FDI 指标样本必须使用最近记录容量限制");
+        AssertEqual(64, telemetry.CurrentSpectatorWaitSamples, "Spectator wait 样本必须使用最近记录容量限制");
+    }
+
+    private static void BalanceTelemetryEscapesJsonControlCharacters()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "EmergencyEventsTelemetryEscape-" + Guid.NewGuid().ToString("N"));
+        BalanceTelemetryService telemetry = new BalanceTelemetryService(
+            new BalanceTelemetryConfig(),
+            directory);
+        telemetry.StartRound(904, Utc(6, 31), 16);
+        telemetry.RecordSpectatorWait(904, "S-01", 3d, "source\tvalue\b\f", isCensored: false);
+
+        string file = Directory.GetFiles(directory, "balance-*.jsonl").Single();
+        string line = File.ReadAllLines(file).Single();
+        AssertTrue(!line.Contains('\t'), "JSONL 不得保留未转义的 Tab 控制字符");
+        AssertTrue(line.Contains("\\t", StringComparison.Ordinal) && line.Contains("\\b", StringComparison.Ordinal) && line.Contains("\\f", StringComparison.Ordinal), "JSONL 必须转义完整控制字符");
+    }
+
+    private static void BalanceTelemetryRecordsWaveMaturity()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "EmergencyEventsTelemetryWave-" + Guid.NewGuid().ToString("N"));
+        BalanceTelemetryService telemetry = new BalanceTelemetryService(new BalanceTelemetryConfig(), directory);
+        DateTime completedAt = Utc(6, 40);
+        MajorWaveRecord record = new MajorWaveRecord(
+            "905-MW-001",
+            "NtfWave",
+            PopulationTier.E,
+            6,
+            new[] { 1, 2, 3, 4, 5, 6 },
+            completedAt.AddSeconds(-8),
+            completedAt);
+        AssertTrue(record.TryCompleteSurvivalObservation(2, completedAt.AddSeconds(120)), "测试波次必须先完成 120 秒观察");
+
+        telemetry.RecordWaveMaturity(905, record);
+
+        string file = Directory.GetFiles(directory, "balance-*.jsonl").Single();
+        string line = File.ReadAllLines(file).Single();
+        AssertTrue(line.Contains("PRIMARY_WAVE_MATURED", StringComparison.Ordinal), "Telemetry 必须记录波次成熟事件");
+        AssertTrue(line.Contains("\"survivalCount120s\":\"2\"", StringComparison.Ordinal), "Telemetry 必须记录 120 秒实际存活人数");
+        AssertTrue(line.Contains("matureAt", StringComparison.Ordinal), "Telemetry 必须记录 120 秒成熟时间");
+    }
+
+    private static void BalanceTelemetryHonorsRoundEndFlushOption()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "EmergencyEventsTelemetryFlush-" + Guid.NewGuid().ToString("N"));
+        BalanceTelemetryService telemetry = new BalanceTelemetryService(
+            new BalanceTelemetryConfig { FlushOnRoundEnd = false },
+            directory);
+        telemetry.StartRound(906, Utc(6, 31), 16);
+        telemetry.CompleteRound(906, Utc(6, 32), "E", 16);
+
+        AssertTrue(!Directory.Exists(directory) || Directory.GetFiles(directory, "round-summary-*.jsonl").Length == 0, "FlushOnRoundEnd=false 时不得写入回合摘要");
     }
 
     private static DlrcEvaluationCompletedEvent CreateEvaluation(RoundSnapshot snapshot, long evaluationId)
@@ -2025,7 +2155,7 @@ internal static class Program
         SelectionDecision? decision = new EventSelectionService(new SupportSourceArbitrator(new EventDirectorConfig())).SelectSupport(context, new[] { first, second }, new ProfessionalResponseTracker());
 
         AssertTrue(decision is not null && decision.O4SelectionRequired, "Foundation 多候选必须标记 O4SelectionRequired");
-        AssertTrue(decision!.HasFallback && decision.Candidate == first, "Foundation 多候选必须有确定性回退");
+        AssertTrue(!decision!.HasFallback && decision.Candidate == first, "Foundation 多候选必须交给 O4 选择且不得携带自动替代回退");
     }
 
     private static void DirectorChaosAndGoiSelectAutomatically()
@@ -2418,6 +2548,25 @@ internal static class Program
         AssertTrue(director.Logs.Count <= 256, "Director 日志必须有界");
     }
 
+    private static void DirectorCompletedSupportCycleClearsSecondSlot()
+    {
+        EventDefinition support = CreateDirectorDefinition("completed-support", EventCategory.Support, EventSource.Chaos, EventResponseLevel.L0, 2);
+        EventDefinition nonSupport = CreateDirectorDefinition("completed-nonsupport", EventCategory.NonSupport, EventSource.Internal, EventResponseLevel.L0, 1);
+        EventDirector director = CreateDirectorForLifecycle(new[] { support, nonSupport });
+        DirectorCycle cycle = SelectDirectorCycle(director, 7051, Utc(23, 5));
+        DateTime startedAt = Utc(23, 5).AddSeconds(10);
+
+        AdvanceDirectorToPrepared(director);
+        AssertTrue(director.Advance(EventLifecycleState.Started, true, startedAt), "Support 周期必须进入 Started");
+        AssertTrue(director.Commit(cycle.SelectedSupport!, DirectorSlot.Support, startedAt), "Support 周期必须成功 Commit");
+        AssertTrue(cycle.SecondSlotDueAt.HasValue, "Support Commit 后必须建立第二槽位");
+
+        AssertTrue(director.Advance(EventLifecycleState.Completed, true, startedAt.AddSeconds(1)), "完成周期必须允许进入 Completed");
+        AssertTrue(!director.IsBusy, "Completed 后不得保持 busy");
+        AssertTrue(director.CurrentCycle is null, "Completed 后必须清理 CurrentCycle");
+        AssertTrue(!director.Scheduler.SecondSlotDueAt.HasValue, "Completed 后不得保留旧 Event2 DueAt");
+    }
+
     private static void DirectorProfessionalSelectionIsProvisional()
     {
         EventDefinition bio = CreateDirectorDefinitionWithCrisis("professional-bio", EventResponseLevel.L3, new[] { CrisisTag.BIO }, EventSource.ProfessionalCrisisResponse);
@@ -2457,6 +2606,7 @@ internal static class Program
             AssertTrue(!director.Scheduler.SecondSlotDueAt.HasValue, cancellationName + " 后 DueAt 必须被清除");
         }
     }
+
 
     private static void DirectorSecondSlotExecutesOnlyOnce()
     {
@@ -2516,6 +2666,52 @@ internal static class Program
         AssertEqual(EventSource.Foundation, selected, "总权重为零时必须按稳定 Foundation -> Chaos -> GOI 顺序回退");
     }
 
+    private static void DirectorProfessionalCommitFailureDoesNotConsume()
+    {
+        ThrowingEventCostBoundary cost = new ThrowingEventCostBoundary();
+        EventDefinition definition = CreateDirectorDefinitionWithCrisis(
+            "professional-cost-failure",
+            EventResponseLevel.L3,
+            new[] { CrisisTag.BIO },
+            EventSource.ProfessionalCrisisResponse);
+        EventDirector director = CreateDirectorForLifecycle(definition, cost);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 6071);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, CrisisTag.BIO);
+        DirectorCycle cycle = director.SelectCycle(CreateDirectorContext(result, assessment))!;
+        AdvanceDirectorToPrepared(director);
+        AssertTrue(director.Advance(EventLifecycleState.Started, true, Utc(14, 20)), "专业周期必须进入 Started");
+
+        bool committed = director.Commit(
+            cycle.SelectedSupport!,
+            DirectorSlot.Support,
+            Utc(14, 21),
+            CreateDirectorContext(result, assessment));
+
+        AssertTrue(!committed, "成本边界失败时 Commit 必须拒绝");
+        AssertTrue(director.Tracker.CanConsume(CrisisTag.BIO, EventResponseLevel.L3), "成本失败不得消费 Professional Response");
+        AssertEqual(EventLifecycleState.Started, cycle.State, "成本失败不得伪造 Committed 状态");
+    }
+
+    private static void DirectorProfessionalCommitRequiresLatestContext()
+    {
+        EventDefinition definition = CreateDirectorDefinitionWithCrisis(
+            "professional-context-required",
+            EventResponseLevel.L3,
+            new[] { CrisisTag.BIO },
+            EventSource.ProfessionalCrisisResponse);
+        EventDirector director = CreateDirectorForLifecycle(definition);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 6072);
+        DlrcEvaluationResult result = CreateCrisisResult(snapshot, 4, FoundationStrength.STRONG);
+        CrisisAssessment assessment = CreateDirectorAssessment(snapshot, result, CrisisTag.BIO);
+        DirectorCycle cycle = director.SelectCycle(CreateDirectorContext(result, assessment))!;
+        AdvanceDirectorToPrepared(director);
+        AssertTrue(director.Advance(EventLifecycleState.Started, true, Utc(14, 22)), "专业周期必须进入 Started");
+
+        AssertTrue(!director.Commit(cycle.SelectedSupport!, DirectorSlot.Support, Utc(14, 23)), "Professional Commit 缺少最新 Context 时必须拒绝");
+        AssertTrue(director.Tracker.CanConsume(CrisisTag.BIO, EventResponseLevel.L3), "缺少最新 Context 不得消费 Professional Response");
+    }
+
     private static void M06ConfigSanitizesValues()
     {
         O4PanelConfig config = new O4PanelConfig
@@ -2532,6 +2728,7 @@ internal static class Program
         AssertEqual(5, config.VoteDurationSeconds, "投票时长必须限制为至少 5 秒");
         AssertEqual(2, config.MaxCandidates, "M06 最大候选数必须限制为两项");
         AssertEqual(256, config.HistoryCapacity, "M06 会话历史必须有界");
+        AssertTrue(typeof(O4PanelConfig).GetProperty("AllowVoteChange") is null, "投票改票配置必须移除，避免暴露不会生效的选项");
         AssertTrue(typeof(O4PanelConfig).GetProperty("PanelVerticalOffset") is null, "EXILED Hint API 不支持时不得伪造 Anchor 配置");
     }
 
@@ -2637,7 +2834,7 @@ internal static class Program
         AssertTrue(panel.Contains("EVENT SELECTION", StringComparison.Ordinal), "选择面板必须进入事件选择模式");
         AssertTrue(panel.Contains("Alpha display", StringComparison.Ordinal), "选择面板必须使用 EventDefinition.DisplayName");
         AssertTrue(panel.Contains("event-beta", StringComparison.Ordinal), "选择面板必须保留 EventId 回退字段");
-        AssertTrue(panel.Contains("已投 2 / 5", StringComparison.Ordinal), "分母必须是会话开始时 O4 快照人数");
+        AssertTrue(panel.Contains("已投 2", StringComparison.Ordinal), "选择面板必须显示当前已投票数量");
         AssertTrue(panel.Contains("剩余 14 秒", StringComparison.Ordinal), "选择面板必须显示投票剩余时间");
     }
 
@@ -2647,14 +2844,13 @@ internal static class Program
         O4SelectionRequest request = CreateO4Request(901, 1, "o4-session-1");
         O4VoteSession session = new O4VoteSession(
             request,
-            new[] { new O4PlayerSnapshot("O4-01", true, O4RoleState.Spectator) },
             start,
-            start.AddSeconds(20),
-            allowVoteChange: true);
+            start.AddSeconds(20));
 
         AssertEqual(901L, session.RoundId, "Vote Session 必须绑定 RoundId");
         AssertEqual(1L, session.CycleId, "Vote Session 必须绑定 Director CycleId");
         AssertEqual("o4-session-1", session.SessionId, "Vote Session 必须绑定 SessionId");
+        AssertTrue(typeof(O4VoteSession).GetProperty("EligibleO4Ids") is null, "会话不得暴露固定选民白名单");
         AssertEqual(O4VoteSessionState.CREATED, session.State, "会话必须先处于 CREATED");
         AssertTrue(session.TryOpen(), "合法会话必须可以打开");
         AssertEqual(O4VoteSessionState.OPEN, session.State, "打开后会话必须处于 OPEN");
@@ -2680,7 +2876,7 @@ internal static class Program
         AssertEqual(5, result.EligibleVotes, "最终计票必须包含当前仍有资格的投票");
     }
 
-    private static void M06VoteSessionTieFallsBack()
+    private static void M06VoteSessionTieReturnsTiedCandidates()
     {
         DateTime start = Utc(7, 5);
         O4SelectionRequest request = CreateO4Request(903, 3, "o4-session-3");
@@ -2693,30 +2889,31 @@ internal static class Program
 
         O4SelectionResult result = session.Resolve(start.AddSeconds(20), voters);
 
-        AssertEqual(O4SelectionOutcome.FALLBACK, result.Outcome, "平票必须回退 M05");
+        AssertEqual(O4SelectionOutcome.TIE, result.Outcome, "平票必须作为明确 TIE 结果交回 M05");
         AssertEqual("TIE", result.Reason, "平票必须记录 TIE 原因");
         AssertTrue(string.IsNullOrEmpty(result.SelectedEventId), "平票不得伪造赢家");
-        AssertEqual(O4VoteSessionState.EXPIRED, session.State, "平票超时必须结束为 EXPIRED");
+        AssertSequence(new[] { "event-alpha", "event-beta" }, result.TiedCandidateIds, "平票必须只返回最高票候选集合");
+        AssertEqual(O4VoteSessionState.RESOLVED, session.State, "平票结果产生后会话必须结束为 RESOLVED");
     }
 
-    private static void M06VoteSessionNoVoteFallsBack()
+    private static void M06VoteSessionNoVoteEndsWithoutSelection()
     {
         DateTime start = Utc(7, 6);
         O4VoteSession session = OpenO4Session(CreateO4Request(904, 4, "o4-session-4"), CreateO4Players(3), start);
         O4SelectionResult result = session.Resolve(start.AddSeconds(20), CreateO4Players(3));
 
-        AssertEqual(O4SelectionOutcome.FALLBACK, result.Outcome, "零票必须回退 M05");
+        AssertEqual(O4SelectionOutcome.FALLBACK, result.Outcome, "零票必须结束且不得伪造候选选择");
         AssertEqual("NO_VOTE", result.Reason, "零票必须记录 NO_VOTE 原因");
     }
 
-    private static void M06NoO4FallsBackImmediately()
+    private static void M06NoO4SkipsSupportOpportunity()
     {
         DateTime now = Utc(7, 7);
         O4VoteService service = new O4VoteService(new O4PanelConfig());
         bool opened = service.TryOpenSession(CreateO4Request(905, 5, "o4-session-5"), Array.Empty<O4PlayerSnapshot>(), now, out O4SelectionResult immediate);
 
         AssertTrue(!opened, "没有 O4 时不得创建等待会话");
-        AssertEqual(O4SelectionOutcome.FALLBACK, immediate.Outcome, "没有 O4 必须立即回退 M05");
+        AssertEqual(O4SelectionOutcome.SKIPPED, immediate.Outcome, "没有 O4 时必须跳过当前 O4 支援机会");
         AssertEqual("NO_O4_AVAILABLE", immediate.Reason, "没有 O4 必须记录明确原因");
         AssertTrue(service.ActiveSession is null, "没有 O4 时 ActiveSession 必须为空");
     }
@@ -2732,35 +2929,37 @@ internal static class Program
         AssertEqual("event-alpha", immediate.SelectedEventId, "单一候选结果必须来自 M05 shortlist");
     }
 
-    private static void M06VoteChangeKeepsOneVoter()
+    private static void M06VoteChangeIsRejected()
     {
         DateTime start = Utc(7, 9);
         O4VoteSession session = OpenO4Session(CreateO4Request(907, 7, "o4-session-7"), CreateO4Players(2), start);
         AssertTrue(session.TryCastVote("O4-01", 1, start.AddSeconds(1), true, out bool firstChanged, out _), "首次投票必须成功");
         AssertTrue(!firstChanged, "首次投票不是改票");
-        AssertTrue(session.TryCastVote("O4-01", 2, start.AddSeconds(2), true, out bool secondChanged, out _), "允许改票时第二次投票必须成功");
-        AssertTrue(secondChanged, "第二次投票必须标记为改票");
+        AssertTrue(!session.TryCastVote("O4-01", 2, start.AddSeconds(2), true, out bool secondChanged, out string reason), "投票后再次提交必须被拒绝");
+        AssertTrue(!secondChanged, "禁止改票时不得标记 ChangedVote");
+        AssertEqual("ALREADY_VOTED", reason, "重复投票必须返回明确原因");
         AssertEqual(1, session.VoteCount, "改票不得增加投票人数");
         O4SelectionResult result = session.Resolve(start.AddSeconds(20), CreateO4Players(2));
-        AssertEqual("event-beta", result.SelectedEventId, "改票后的最终选择必须是候选 2");
+        AssertEqual("event-alpha", result.SelectedEventId, "被拒绝的改票不得改变原始选择");
     }
 
-    private static void M06RepeatedVoteDoesNotDuplicate()
+    private static void M06RepeatedVoteIsRejected()
     {
         DateTime start = Utc(7, 10);
         O4VoteSession session = OpenO4Session(CreateO4Request(908, 8, "o4-session-8"), CreateO4Players(2), start);
         AssertTrue(session.TryCastVote("O4-01", 1, start.AddSeconds(1), true, out _, out _), "首次投票必须成功");
-        AssertTrue(session.TryCastVote("O4-01", 1, start.AddSeconds(2), true, out bool changed, out _), "重复同一选项可以安全重试");
+        AssertTrue(!session.TryCastVote("O4-01", 1, start.AddSeconds(2), true, out bool changed, out string reason), "重复同一选项也必须被拒绝");
         AssertTrue(!changed, "重复同一选项不得算作改票");
+        AssertEqual("ALREADY_VOTED", reason, "重复同一选项必须返回已投票原因");
         AssertEqual(1, session.VoteCount, "重复同一选项不得增加投票人数");
     }
 
-    private static void M06RejectsNonO4AndNewJoiner()
+    private static void M06RejectsNonO4AndAllowsNewJoiner()
     {
         DateTime start = Utc(7, 11);
         O4VoteSession session = OpenO4Session(CreateO4Request(909, 9, "o4-session-9"), CreateO4Players(1), start);
-        AssertTrue(!session.TryCastVote("alive-player", 1, start.AddSeconds(1), true, out _, out _), "非 O4 不得投票");
-        AssertTrue(!session.TryCastVote("O4-02", 1, start.AddSeconds(1), true, out _, out _), "会话开始后新加入的 O4 不得加入当前选民快照");
+        AssertTrue(!session.TryCastVote("alive-player", 1, start.AddSeconds(1), false, out _, out _), "非 O4 不得投票");
+        AssertTrue(session.TryCastVote("O4-02", 1, start.AddSeconds(1), true, out _, out _), "投票进行期间新加入的 O4 必须可以投票");
         AssertTrue(!session.TryCastVote("O4-01", 1, start.AddSeconds(1), false, out _, out _), "当前失去 O4 资格的玩家不得投票");
     }
 
@@ -2839,6 +3038,31 @@ internal static class Program
         AssertTrue(cycle!.IsAwaitingO4Selection, "等待 O4 时 M05 必须保持明确 pending 状态");
     }
 
+    private static void M06M05ResolvesTieAmongCandidates()
+    {
+        RecordingO4Selector selector = new RecordingO4Selector(isAvailable: true);
+        EventDefinition first = CreateDirectorDefinition("m06-tie-a", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 10);
+        EventDefinition second = CreateDirectorDefinition("m06-tie-b", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 1);
+        EventDirector director = new EventDirector(new[] { first, second }, new EventDirectorConfig { Enabled = true }, o4Selector: selector);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 9142, timestamp: Utc(7, 16));
+        DirectorCycle cycle = director.SelectCycle(CreateDirectorContext(CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG), null, foundationAvailable: 6))!;
+        O4SelectionRequest request = selector.LastRequest!;
+
+        selector.Complete(O4SelectionResult.Tie(
+            request.RoundId,
+            request.CycleId,
+            request.SessionId,
+            Utc(7, 17),
+            new[] { "m06-tie-a", "m06-tie-b" },
+            new[] { 2, 2 },
+            eligibleVotes: 4,
+            votesReceived: 4));
+
+        AssertTrue(!cycle.IsAwaitingO4Selection, "平票回传后不得继续保留 pending");
+        AssertEqual("m06-tie-a", cycle.SelectedSupport!.Definition.EventId, "平票必须由 M05 既有排序规则在平票候选中裁决");
+        AssertTrue(director.Logs.Any(entry => entry.Reason == "O4_SELECTION_TIE_M05_RESOLVED"), "平票的 M05 裁决必须有明确日志");
+    }
+
     private static void M06M05CleanupCancelsPendingSelection()
     {
         RecordingO4Selector selector = new RecordingO4Selector(isAvailable: true);
@@ -2889,19 +3113,42 @@ internal static class Program
         AssertEqual(EventLifecycleState.RolledBack, cycle.State, "最终重验证失败必须回滚周期");
     }
 
-    private static void M06M05PreservesFallbackWhenUnavailable()
+    private static void M06M05SkipsSupportWhenUnavailable()
     {
         RecordingO4Selector selector = new RecordingO4Selector(isAvailable: false);
         EventDefinition first = CreateDirectorDefinition("m06-fallback-a", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 2);
         EventDefinition second = CreateDirectorDefinition("m06-fallback-b", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 1);
-        EventDirector director = new EventDirector(new[] { first, second }, new EventDirectorConfig { Enabled = true }, o4Selector: selector);
+        EventDefinition nonSupport = CreateDirectorDefinition("m06-fallback-ns", EventCategory.NonSupport, EventSource.Internal, EventResponseLevel.L0, 1);
+        EventDirector director = new EventDirector(new[] { first, second, nonSupport }, new EventDirectorConfig { Enabled = true }, o4Selector: selector);
         RoundSnapshot snapshot = CreateSnapshot(roundId: 917, timestamp: Utc(7, 22));
         DirectorCycle? cycle = director.SelectCycle(CreateDirectorContext(CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG), null, foundationAvailable: 6));
 
-        AssertTrue(cycle is not null, "Selector 不可用时仍必须保留 M05 周期");
+        AssertTrue(cycle is not null, "Selector 不可用时仍应允许独立的 NON_SUPPORT 周期继续运行");
         AssertEqual(0, selector.RequestCount, "Selector 不可用时不得请求选择");
-        AssertTrue(!cycle!.IsAwaitingO4Selection, "Selector 不可用时必须直接走 M05 fallback");
-        AssertEqual("m06-fallback-a", cycle.SelectedSupport!.Definition.EventId, "Selector 不可用时必须保留原 M05 首选");
+        AssertTrue(cycle!.SelectedSupport is null, "Selector 不可用时必须跳过 O4 支援候选");
+        AssertEqual("m06-fallback-ns", cycle.SelectedNonSupport!.Definition.EventId, "跳过支援后必须保留独立 NON_SUPPORT 候选");
+        AssertTrue(director.IsBusy && director.CurrentCycle is not null, "独立 NON_SUPPORT 周期必须保持正常生命周期");
+    }
+
+    private static void M06CancellationDoesNotFallbackSupport()
+    {
+        RecordingO4Selector selector = new RecordingO4Selector(isAvailable: true);
+        EventDefinition first = CreateDirectorDefinition("m06-cancel-a", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 2);
+        EventDefinition second = CreateDirectorDefinition("m06-cancel-b", EventCategory.Support, EventSource.Foundation, EventResponseLevel.L0, 1);
+        EventDirector director = new EventDirector(new[] { first, second }, new EventDirectorConfig { Enabled = true }, o4Selector: selector);
+        RoundSnapshot snapshot = CreateSnapshot(roundId: 9171, timestamp: Utc(7, 22));
+        DirectorCycle cycle = director.SelectCycle(CreateDirectorContext(CreateCrisisResult(snapshot, 1, FoundationStrength.STRONG), null, foundationAvailable: 6))!;
+        O4SelectionRequest request = selector.LastRequest!;
+
+        selector.Complete(O4SelectionResult.Cancelled(
+            request.RoundId,
+            request.CycleId,
+            request.SessionId,
+            "INVALIDATED",
+            Utc(7, 23)));
+
+        AssertTrue(cycle.State == EventLifecycleState.RolledBack, "O4 取消后不得保留待选择周期");
+        AssertTrue(director.CurrentCycle is null && !director.IsBusy, "O4 取消后必须释放 M05 周期和 busy 状态");
     }
 
     private static void M06ProfessionalVoteDoesNotConsume()
@@ -2972,8 +3219,7 @@ internal static class Program
             cycleId,
             sessionId,
             Utc(7, 30),
-            candidates.Take(candidateCount).ToArray(),
-            "event-alpha");
+            candidates.Take(candidateCount).ToArray());
     }
 
     private static O4PlayerSnapshot[] CreateO4Players(int count)
@@ -2985,7 +3231,7 @@ internal static class Program
 
     private static O4VoteSession OpenO4Session(O4SelectionRequest request, IReadOnlyList<O4PlayerSnapshot> voters, DateTime start)
     {
-        O4VoteSession session = new O4VoteSession(request, voters, start, start.AddSeconds(20), allowVoteChange: true);
+        O4VoteSession session = new O4VoteSession(request, start, start.AddSeconds(20));
         AssertTrue(session.TryOpen(), "测试 Vote Session 必须打开");
         return session;
     }
@@ -3065,6 +3311,14 @@ internal static class Program
         public void Record(EventCandidate candidate, string cycleId, DateTime committedAt)
         {
             Count++;
+        }
+    }
+
+    private sealed class ThrowingEventCostBoundary : IEventCostBoundary
+    {
+        public void Record(EventCandidate candidate, string cycleId, DateTime committedAt)
+        {
+            throw new InvalidOperationException("Injected cost boundary failure");
         }
     }
 

@@ -19,6 +19,7 @@ public sealed class CrisisManager
     private readonly Dictionary<CrisisTag, long> activeEpisodeIds = new Dictionary<CrisisTag, long>();
     private long nextEpisodeId;
     private long highestProcessedEvaluationId;
+    private long roundId;
 
     public CrisisManager(CrisisOptions? options = null)
     {
@@ -43,6 +44,12 @@ public sealed class CrisisManager
 
     public CrisisAssessment? PreviousCrisisAssessment { get; private set; }
 
+    public void StartRound(long currentRoundId)
+    {
+        CleanupRound();
+        roundId = Math.Max(0L, currentRoundId);
+    }
+
     public CrisisAssessment? Evaluate(DlrcEvaluationCompletedEvent completedEvent)
     {
         if (completedEvent is null)
@@ -51,7 +58,8 @@ public sealed class CrisisManager
         }
 
         if (!completedEvent.Result.IsValid
-            || completedEvent.Snapshot.RoundId != completedEvent.Result.RoundId)
+            || completedEvent.Snapshot.RoundId != completedEvent.Result.RoundId
+            || roundId > 0L && completedEvent.Snapshot.RoundId != roundId)
         {
             return CurrentCrisisAssessment;
         }
@@ -241,6 +249,7 @@ public sealed class CrisisManager
         activeEpisodeIds.Clear();
         nextEpisodeId = 0L;
         highestProcessedEvaluationId = 0L;
+        roundId = 0L;
         PreviousCrisisAssessment = null;
         CurrentCrisisAssessment = null;
     }

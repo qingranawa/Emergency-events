@@ -12,7 +12,7 @@
 | M04 — Crisis System | READY | Active/Inactive 危机与 Episode 模型。 |
 | M04.5 — Facility Disorder | LOGIC READY / BALANCE PENDING | FDI 结算和去重已实现，秩序恢复策略仍待设计。 |
 | M05 — Event Director | FRAMEWORK READY / PRODUCTION EVENT PACK NOT STARTED | Director、资格判断和运行时安全边界已实现，正式事件未注册。 |
-| M06 — O4 Panel | CORE IMPLEMENTED / LIVE VALIDATION PENDING | 单 Hint 面板、真实客户端投票命令、M05 shortlist 边界和生命周期清理。 |
+| M06 — O4 Panel | CORE IMPLEMENTED / LIVE VALIDATION PENDING | 动态 O4 observer decision layer、单 Hint 面板、临时客户端投票通道、M05 shortlist 边界和生命周期清理。 |
 
 ## 阅读顺序
 
@@ -21,6 +21,8 @@
 - [Event Pack Development](EVENT_PACK_DEVELOPMENT.md)：未来新增事件的步骤和禁止事项。
 - [Runtime Contracts](RUNTIME_CONTRACTS.md)：回合状态、危机、FDI、波次和 Director 的运行规则。
 - [Testing](TESTING.md)：自动化、RuntimeHarness、隔离服和真人验证的区别。
+
+`analysis/BALANCE_ANALYSIS_PHASE1.md` 及其 CSV 是 2026-08-27 的历史离线分析归档，所有结果均为模拟数据；它们不代表当前实现，当前行为以源码和本目录中的现行契约文档为准。
 - [Roadmap](ROADMAP.md)：未决定事项和明确延期事项。
 
 ## 核心原则

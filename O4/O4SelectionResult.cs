@@ -20,7 +20,8 @@ public sealed class O4SelectionResult
         DateTime resolvedAt,
         IReadOnlyList<int>? candidateVoteCounts = null,
         int eligibleVotes = 0,
-        int votesReceived = 0)
+        int votesReceived = 0,
+        IReadOnlyList<string>? tiedCandidateIds = null)
     {
         RoundId = roundId;
         CycleId = cycleId;
@@ -33,6 +34,12 @@ public sealed class O4SelectionResult
             (candidateVoteCounts ?? Array.Empty<int>()).Select(count => Math.Max(0, count)).ToArray());
         EligibleVotes = Math.Max(0, eligibleVotes);
         VotesReceived = Math.Max(0, votesReceived);
+        TiedCandidateIds = new ReadOnlyCollection<string>(
+            (tiedCandidateIds ?? Array.Empty<string>())
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray());
     }
 
     public long RoundId { get; }
@@ -54,6 +61,8 @@ public sealed class O4SelectionResult
     public int EligibleVotes { get; }
 
     public int VotesReceived { get; }
+
+    public IReadOnlyList<string> TiedCandidateIds { get; }
 
     public static O4SelectionResult Pending(O4SelectionRequest request)
     {
@@ -88,6 +97,47 @@ public sealed class O4SelectionResult
             candidateVoteCounts,
             eligibleVotes,
             votesReceived);
+    }
+
+    public static O4SelectionResult Tie(
+        long roundId,
+        long cycleId,
+        string sessionId,
+        DateTime resolvedAt,
+        IReadOnlyList<string> tiedCandidateIds,
+        IReadOnlyList<int>? candidateVoteCounts = null,
+        int eligibleVotes = 0,
+        int votesReceived = 0)
+    {
+        return new O4SelectionResult(
+            roundId,
+            cycleId,
+            sessionId,
+            string.Empty,
+            O4SelectionOutcome.TIE,
+            "TIE",
+            resolvedAt,
+            candidateVoteCounts,
+            eligibleVotes,
+            votesReceived,
+            tiedCandidateIds);
+    }
+
+    public static O4SelectionResult Skipped(
+        long roundId,
+        long cycleId,
+        string sessionId,
+        string reason,
+        DateTime resolvedAt)
+    {
+        return new O4SelectionResult(
+            roundId,
+            cycleId,
+            sessionId,
+            string.Empty,
+            O4SelectionOutcome.SKIPPED,
+            reason,
+            resolvedAt);
     }
 
     public static O4SelectionResult Fallback(

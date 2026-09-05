@@ -36,7 +36,7 @@ public sealed class O4VoteService
 
         if (activeSession is not null)
         {
-            immediateResult = O4SelectionResult.Fallback(
+            immediateResult = O4SelectionResult.Skipped(
                 request.RoundId,
                 request.CycleId,
                 request.SessionId,
@@ -88,7 +88,7 @@ public sealed class O4VoteService
 
         if (snapshot.Length == 0)
         {
-            immediateResult = O4SelectionResult.Fallback(
+            immediateResult = O4SelectionResult.Skipped(
                 request.RoundId,
                 request.CycleId,
                 request.SessionId,
@@ -100,10 +100,8 @@ public sealed class O4VoteService
 
         activeSession = new O4VoteSession(
             request,
-            snapshot,
             now,
-            now.AddSeconds(config.VoteDurationSeconds),
-            config.AllowVoteChange);
+            now.AddSeconds(config.VoteDurationSeconds));
         activeSession.TryOpen();
         immediateResult = O4SelectionResult.Pending(request);
         return true;

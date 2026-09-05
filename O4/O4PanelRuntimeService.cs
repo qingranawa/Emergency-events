@@ -135,8 +135,12 @@ public sealed class O4PanelRuntimeService : IO4EventSelector
 
         if (!roundLocalO4Ids.TryGetValue(player.Id, out string? localO4Id))
         {
-            response = "你当前不在本次 O4 选民快照中。";
-            return false;
+            localO4Id = GetOrAssignLocalId(player.Id);
+            if (localO4Id is null)
+            {
+                response = "O4 局内编号已达到上限。";
+                return false;
+            }
         }
 
         O4VoteSession? session = voteService.ActiveSession;
@@ -151,7 +155,7 @@ public sealed class O4PanelRuntimeService : IO4EventSelector
             candidateIndex,
             DateTime.UtcNow,
             true,
-            out bool changedVote,
+            out _,
             out string reason);
         if (!succeeded)
         {
@@ -167,8 +171,8 @@ public sealed class O4PanelRuntimeService : IO4EventSelector
             : "UNKNOWN";
         LogInfo(
             "O4_VOTE_CAST",
-            $"RoundId={roundId};SessionId={session.SessionId};RoundLocalO4Id={localO4Id};CandidateId={candidateId};ChangedVote={changedVote}");
-        response = changedVote ? "O4 投票已修改。" : "O4 投票已记录。";
+            $"RoundId={roundId};SessionId={session.SessionId};RoundLocalO4Id={localO4Id};CandidateId={candidateId};VoteAccepted=true");
+        response = "O4 投票已记录。";
         return true;
     }
 
@@ -186,7 +190,7 @@ public sealed class O4PanelRuntimeService : IO4EventSelector
 
         if (!IsAvailable || request.RoundId != roundId)
         {
-            completed(O4SelectionResult.Fallback(request.RoundId, request.CycleId, request.SessionId, "DISABLED", DateTime.UtcNow));
+            completed(O4SelectionResult.Skipped(request.RoundId, request.CycleId, request.SessionId, "NO_O4_AVAILABLE", DateTime.UtcNow));
             return;
         }
 
@@ -194,7 +198,10 @@ public sealed class O4PanelRuntimeService : IO4EventSelector
         bool opened = voteService.TryOpenSession(request, eligibleO4, DateTime.UtcNow, out O4SelectionResult immediateResult);
         if (!opened)
         {
-            LogInfo("O4_SELECTION_FALLBACK", $"RoundId={request.RoundId};SessionId={request.SessionId};Reason={immediateResult.Reason}");
+            string action = immediateResult.Outcome == O4SelectionOutcome.SKIPPED
+                ? "O4_SELECTION_SKIPPED"
+                : "O4_SELECTION_FALLBACK";
+            LogInfo(action, $"RoundId={request.RoundId};SessionId={request.SessionId};Reason={immediateResult.Reason}");
             completed(immediateResult);
             return;
         }
@@ -205,7 +212,7 @@ public sealed class O4PanelRuntimeService : IO4EventSelector
         O4VoteSession session = voteService.ActiveSession!;
         LogInfo(
             "O4_SELECTION_REQUESTED",
-            $"RoundId={request.RoundId};CycleId={request.CycleId};SessionId={request.SessionId};Candidates={request.Candidates.Count};EligibleO4Count={session.EligibleO4Ids.Count};VoteDuration={config.VoteDurationSeconds}");
+            $"RoundId={request.RoundId};CycleId={request.CycleId};SessionId={request.SessionId};Candidates={request.Candidates.Count};EligibleO4Count={eligibleO4.Count};VoteDuration={config.VoteDurationSeconds}");
     }
 
     public void CancelAll(string reason)
@@ -288,7 +295,7 @@ public sealed class O4PanelRuntimeService : IO4EventSelector
                 activeRequest.Candidates,
                 TimeRemainingSeconds,
                 session.VoteCount,
-                session.EligibleO4Ids.Count);
+                currentO4.Count);
             ShowToEligible(panel, currentO4);
         }
         else if (config.ShowNormalPanel)

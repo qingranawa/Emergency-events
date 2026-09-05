@@ -79,6 +79,21 @@ public sealed class EventDirector
 
         SelectionDecision? support = selection.SelectSupport(context, candidates, Tracker);
         SelectionDecision? nonSupport = selection.SelectNonSupport(context, candidates);
+        bool supportNeedsO4 = support is not null
+            && support.O4SelectionRequired
+            && support.O4Shortlist.Count > 1;
+        if (supportNeedsO4 && o4Selector?.IsAvailable != true)
+        {
+            AddLog(new DirectorLogEntry(
+                context.Timestamp,
+                cycle.CycleId,
+                support!.Candidate.Definition.EventId,
+                cycle.State,
+                true,
+                "O4_SELECTION_SKIPPED:Reason=NO_O4_AVAILABLE"));
+            support = null;
+        }
+
         if (support is null && nonSupport is null)
         {
             IsBusy = false;
@@ -100,11 +115,13 @@ public sealed class EventDirector
         cycle.State = EventLifecycleState.Selected;
         CurrentCycle = cycle;
         if (support is not null
-            && support.O4SelectionRequired
-            && support.O4Shortlist.Count > 1
-            && o4Selector?.IsAvailable == true)
+            && supportNeedsO4)
         {
             BeginO4Selection(context, cycle, support);
+            if (CurrentCycle is null)
+            {
+                return null;
+            }
         }
 
         return cycle;
@@ -162,7 +179,7 @@ public sealed class EventDirector
 
         if (nextState == EventLifecycleState.Completed)
         {
-            IsBusy = false;
+            ReleaseCurrentCycle();
         }
         else if (nextState == EventLifecycleState.RolledBack)
         {
@@ -228,6 +245,17 @@ public sealed class EventDirector
         }
 
         candidate = selectedCandidate;
+        if (candidate.Definition.IsProfessionalResponse && latestContext is null)
+        {
+            AddLog(new DirectorLogEntry(
+                committedAt,
+                CurrentCycle.CycleId,
+                candidate.Definition.EventId,
+                CurrentCycle.State,
+                false,
+                "ProfessionalResponseRequiresLatestContext"));
+            return false;
+        }
 
         if (candidate.Definition.IsProfessionalResponse)
         {
@@ -239,13 +267,42 @@ public sealed class EventDirector
                 }
             }
 
+        }
+
+        try
+        {
+            costBoundary.Record(candidate, CurrentCycle.CycleId.ToString(), committedAt);
+        }
+        catch (Exception exception)
+        {
+            AddLog(new DirectorLogEntry(
+                committedAt,
+                CurrentCycle.CycleId,
+                candidate.Definition.EventId,
+                CurrentCycle.State,
+                false,
+                $"CommitCostFailed:{exception.GetType().Name}"));
+            return false;
+        }
+
+        if (candidate.Definition.IsProfessionalResponse)
+        {
             foreach (var tag in candidate.Definition.RequiredCrisisTags)
             {
-                Tracker.Consume(tag, candidate.Definition.RequiredResponseLevel, CurrentCycle.CycleId.ToString());
+                if (!Tracker.Consume(tag, candidate.Definition.RequiredResponseLevel, CurrentCycle.CycleId.ToString()))
+                {
+                    AddLog(new DirectorLogEntry(
+                        committedAt,
+                        CurrentCycle.CycleId,
+                        candidate.Definition.EventId,
+                        CurrentCycle.State,
+                        false,
+                        "ProfessionalResponseConsumeFailed"));
+                    return false;
+                }
             }
         }
 
-        costBoundary.Record(candidate, CurrentCycle.CycleId.ToString(), committedAt);
         CurrentCycle.State = EventLifecycleState.Committed;
         AddLog(new DirectorLogEntry(
             committedAt,
@@ -268,7 +325,7 @@ public sealed class EventDirector
         if (CurrentCycle is null
             || CurrentCycle.State != EventLifecycleState.Committed
             || CurrentCycle.SelectedNonSupport is null
-            || !Scheduler.TryConsumeDueSlot(now))
+            || !Scheduler.TryConsumeDueSlot(now, CurrentCycle.CycleId))
         {
             return false;
         }
@@ -305,8 +362,7 @@ public sealed class EventDirector
             cycle.CycleId,
             sessionId,
             context.Timestamp,
-            decision.O4Shortlist.Select(O4CandidateView.From).ToArray(),
-            decision.Candidate.Definition.EventId);
+            decision.O4Shortlist.Select(O4CandidateView.From).ToArray());
         try
         {
             o4Selector!.RequestSelection(request, HandleO4Selection);
@@ -320,14 +376,7 @@ public sealed class EventDirector
         }
         catch (Exception exception)
         {
-            cycle.PendingO4SelectionSessionId = null;
-            AddLog(new DirectorLogEntry(
-                context.Timestamp,
-                cycle.CycleId,
-                decision.Candidate.Definition.EventId,
-                EventLifecycleState.Selected,
-                true,
-                $"O4_SELECTION_FALLBACK:REQUEST_FAILED:{exception.GetType().Name}"));
+            SkipO4Support(cycle, $"REQUEST_FAILED:{exception.GetType().Name}", context.Timestamp);
         }
     }
 
@@ -354,6 +403,44 @@ public sealed class EventDirector
 
         DirectorCycle cycle = CurrentCycle;
         cycle.PendingO4SelectionSessionId = null;
+        if (result.Outcome == O4SelectionOutcome.CANCELLED
+            || string.Equals(result.Reason, "INVALIDATED", StringComparison.Ordinal))
+        {
+            AbortCurrentCycle($"O4_SELECTION_CANCELLED:{result.Reason}", result.ResolvedAt);
+            return;
+        }
+
+        if (result.Outcome == O4SelectionOutcome.SKIPPED
+            || string.Equals(result.Reason, "NO_O4_AVAILABLE", StringComparison.Ordinal)
+            || string.Equals(result.Reason, "DISABLED", StringComparison.Ordinal)
+            || result.Reason.StartsWith("REQUEST_FAILED", StringComparison.Ordinal))
+        {
+            SkipO4Support(cycle, result.Reason, result.ResolvedAt);
+            return;
+        }
+
+        if (result.Outcome == O4SelectionOutcome.TIE)
+        {
+            EventCandidate? tieWinner = selection.ResolveTiedCandidates(
+                cycle.O4SelectionCandidates,
+                result.TiedCandidateIds);
+            if (tieWinner is null)
+            {
+                AbortCurrentCycle("O4_SELECTION_TIE_INVALIDATED", result.ResolvedAt);
+                return;
+            }
+
+            cycle.SelectedSupport = tieWinner;
+            AddLog(new DirectorLogEntry(
+                result.ResolvedAt,
+                cycle.CycleId,
+                tieWinner.Definition.EventId,
+                cycle.State,
+                true,
+                "O4_SELECTION_TIE_M05_RESOLVED"));
+            return;
+        }
+
         if (result.Outcome != O4SelectionOutcome.EXPLICIT_WINNER)
         {
             AddLog(new DirectorLogEntry(
@@ -414,6 +501,24 @@ public sealed class EventDirector
         }
 
         CurrentCycle.PendingO4SelectionSessionId = null;
+    }
+
+    private void SkipO4Support(DirectorCycle cycle, string reason, DateTime at)
+    {
+        cycle.PendingO4SelectionSessionId = null;
+        cycle.SelectedSupport = null;
+        cycle.O4SelectionCandidates = Array.Empty<EventCandidate>();
+        AddLog(new DirectorLogEntry(
+            at,
+            cycle.CycleId,
+            string.Empty,
+            cycle.State,
+            true,
+            $"O4_SELECTION_SKIPPED:Reason={reason}"));
+        if (cycle.SelectedNonSupport is null)
+        {
+            ReleaseCurrentCycle();
+        }
     }
 
     private EventCandidate? RevalidateCandidate(EventCandidate? candidate, DirectorContext context)

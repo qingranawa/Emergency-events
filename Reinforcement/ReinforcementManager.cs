@@ -23,6 +23,7 @@ public sealed class ReinforcementManager
     private const float SurvivalObservationDelaySeconds = 120f;
     private const float TimerExtensionRetryDelaySeconds = 0.1f;
     private const int MaxTimerExtensionRetryCount = 3;
+    private const int MaxPendingNativeWaveCompletions = 256;
 
     private readonly Config config;
     private readonly Func<double>? scpCombatEquivalentProvider;
@@ -82,6 +83,8 @@ public sealed class ReinforcementManager
     }
 
     public event Action<MajorWaveCompletedEvent>? MajorWaveCompleted;
+
+    public event Action<MajorWaveRecord>? MajorWaveSurvivalObserved;
 
     public ReinforcementState? State => state;
 
@@ -403,6 +406,21 @@ public sealed class ReinforcementManager
         if (!IsActiveRound(roundId))
         {
             return;
+        }
+
+        if (pendingNativeWaveCompletions.Count >= MaxPendingNativeWaveCompletions)
+        {
+            TimerExtensionWorkItem evicted = pendingNativeWaveCompletions[0];
+            pendingNativeWaveCompletions.RemoveAt(0);
+            evicted.Record.TryMarkTimerExtensionProcessed();
+            LogTimerExtensionSkipped(
+                evicted.RoundId,
+                evicted.Record.WaveId,
+                evicted.CompletedWave.SpawnableFaction.ToString(),
+                evicted.Record.ActualSpawnedCount,
+                "PendingWorkCapacity",
+                evicted.VanillaResetConfirmed);
+            PublishMajorWaveCompleted(evicted.Record);
         }
 
         pendingNativeWaveCompletions.Add(
@@ -862,6 +880,14 @@ public sealed class ReinforcementManager
                 roundId,
                 "PrimaryWaveSurvivalObserved",
                 $"WaveId={record.WaveId}; ActualSpawnedCount={record.ActualSpawnedCount}; SurvivingCount={record.SurvivingCountAtObservation}; ObservedAt={record.SurvivalObservedAt:O}; DlrcJudgment=DeferredToModule03");
+            try
+            {
+                MajorWaveSurvivalObserved?.Invoke(record);
+            }
+            catch (Exception exception)
+            {
+                LogError(roundId, "PRIMARY_WAVE_MATURITY_PUBLISH_FAILED", exception);
+            }
         }
         finally
         {

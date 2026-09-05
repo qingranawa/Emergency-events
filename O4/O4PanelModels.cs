@@ -39,13 +39,15 @@ public enum O4SelectionOutcome
 {
     PENDING,
     EXPLICIT_WINNER,
+    TIE,
     FALLBACK,
+    SKIPPED,
     CANCELLED,
     STALE,
 }
 
 /// <summary>
-/// 会话开始时拍摄的 O4 资格快照。
+/// O4 资格事实快照，仅用于会话诊断，不作为最终投票白名单。
 /// </summary>
 public sealed class O4PlayerSnapshot
 {
@@ -144,8 +146,7 @@ public sealed class O4SelectionRequest
         long cycleId,
         string sessionId,
         DateTime requestedAt,
-        IReadOnlyList<O4CandidateView> candidates,
-        string fallbackCandidateId)
+        IReadOnlyList<O4CandidateView> candidates)
     {
         if (roundId <= 0L)
         {
@@ -168,7 +169,6 @@ public sealed class O4SelectionRequest
         RequestedAt = requestedAt;
         Candidates = new ReadOnlyCollection<O4CandidateView>(
             (candidates ?? Array.Empty<O4CandidateView>()).Where(candidate => candidate is not null).ToArray());
-        FallbackCandidateId = fallbackCandidateId?.Trim() ?? string.Empty;
     }
 
     public long RoundId { get; }
@@ -181,7 +181,6 @@ public sealed class O4SelectionRequest
 
     public IReadOnlyList<O4CandidateView> Candidates { get; }
 
-    public string FallbackCandidateId { get; }
 }
 
 /// <summary>

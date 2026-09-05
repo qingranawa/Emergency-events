@@ -122,7 +122,7 @@ Primary cap 是上限，不是目标：E=6、D=6、C=8、B=14、A=18。实际人
 
 重要成员为 `SelectCycle`、`TryStart`、`RevalidateBeforeCommit`、`Commit`、`TryBeginSecondSlot` 和 `CleanupRound`，以及 `IsBusy`、`CurrentCycle`、`Tracker`、`Scheduler` 和有界 `Logs`。
 
-`Commit` 只有在调用方提供 `latestContext` 时才执行 Commit 前重验证；不传该参数时只校验当前周期、候选和槽位。需要最新事实保护的生产适配器必须显式传入最新上下文。
+`Commit` 在调用方提供 `latestContext` 时执行 Commit 前重验证；Professional Response 没有最新上下文时直接拒绝。需要最新事实保护的生产适配器必须显式传入最新上下文。
 
 ### `ProfessionalResponseTracker`
 
@@ -136,15 +136,15 @@ Primary cap 是上限，不是目标：E=6、D=6、C=8、B=14、A=18。实际人
 
 ### `O4PanelConfig`
 
-配置 M06 启用状态、普通 Hint、选择功能、刷新/Hint 时长、投票时长、显示字段与最近选择结果容量。`RefreshIntervalSeconds` 限制为 0.5–5，`HintDurationSeconds` 限制为 0.5–5，`VoteDurationSeconds` 限制为 5–120，`MaxCandidates` 限制为 1–2，`HistoryCapacity` 最大 256。EXILED 9.14.2 没有可验证的 Hint anchor API，因此不存在伪造的位置字段。
+配置 M06 启用状态、普通 Hint、选择功能、刷新/Hint 时长、投票时长、显示字段与最近选择结果容量。`RefreshIntervalSeconds` 限制为 0.5–5，`HintDurationSeconds` 限制为 0.5–5，`VoteDurationSeconds` 限制为 5–120，`MaxCandidates` 限制为 1–2，`HistoryCapacity` 最大 256。投票改票配置已删除，每个 O4 每个 Session 只能投一次。Refresh、Hint、VoteDuration 和投票数量呈现均为 `PROVISIONAL / PENDING LIVE TEST`。EXILED 9.14.2 没有可验证的 Hint anchor API，因此不存在伪造的位置字段。
 
 ### `IO4EventSelector` 与 `O4SelectionRequest`
 
-M05 唯一通过 `IO4EventSelector` 请求、取消 O4 会话。`O4SelectionRequest` 绑定 RoundId、CycleId、SessionId、由 M05 提供的 candidate views 和 M05 fallback ID；M06 不接受候选之外的 event ID。
+M05 唯一通过 `IO4EventSelector` 请求、取消 O4 会话。`O4SelectionRequest` 绑定 RoundId、CycleId、SessionId 和由 M05 提供的 candidate views；M06 不接受候选之外的 event ID，也不携带或制造 O4 fallback candidate。
 
 ### `O4SelectionResult`
 
-结果包含同一组 RoundId/CycleId/SessionId、Outcome、SelectedEventId、Reason 和匿名投票统计。`EXPLICIT_WINNER` 只有在多数有效票选择当前 shortlist 内候选时出现；`FALLBACK` 保留 M05 原候选；`CANCELLED` 由生命周期清理产生。M05 必须通过 `MatchesBinding(...)` 拒绝 stale 结果。
+结果包含同一组 RoundId/CycleId/SessionId、Outcome、SelectedEventId、Reason、匿名投票统计和 `TiedCandidateIds`。`EXPLICIT_WINNER` 只有在多数有效票选择当前 shortlist 内候选时出现；`TIE` 只返回最高票候选集合，由 M05 在该集合内按既有系统规则裁决；`SKIPPED / NO_O4_AVAILABLE` 表示跳过当前 O4-required SUPPORT；`CANCELLED` 由生命周期清理产生。M05 必须通过 `MatchesBinding(...)` 拒绝 stale 结果。
 
 ### `O4PanelRuntimeService`
 
@@ -152,6 +152,6 @@ M05 唯一通过 `IO4EventSelector` 请求、取消 O4 会话。`O4SelectionRequ
 
 ## Runtime Provider
 
-`IFacilityStateProvider.GetState(RoundSnapshot)` 是 Facility 状态入口。当前 `SnapshotFacilityStateProvider` 可靠使用 `WarheadDetonated` 映射 `FacilityState.Destroyed`，其余状态仍为 `PROVISIONAL`。`HasO4Selector=false` 在 M06 被禁用、无合法 O4、低人口暂停或运行时不可用时是合法状态，M05 必须使用 fallback。
+`IFacilityStateProvider.GetState(RoundSnapshot)` 是 Facility 状态入口。当前 `SnapshotFacilityStateProvider` 可靠使用 `WarheadDetonated` 映射 `FacilityState.Destroyed`，其余状态仍为 `PROVISIONAL`。`HasO4Selector=false` 在 M06 被禁用、无合法 O4、低人口暂停或运行时不可用时是合法状态；如果 O4-required SUPPORT 没有合法 O4，该支援机会必须跳过，不得自动替代。
 
 `IRecentEventHistory` 只定义由上游提供的只读最近事件列表，不在 M05 内部维护事件历史。`EventDirector.Logs` 才是 Director 自己拥有的诊断历史，容量由 `EventDirectorConfig.MaxLogEntries` 控制，默认 256 条。

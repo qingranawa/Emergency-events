@@ -10,7 +10,7 @@ M06 不创建事件、不会改变 Director cadence、不会安排 Event #2，�
 
 展示使用 EXILED 9.14.2 的 `Player.ShowHint(string, float)`。当前目标 API 不提供可验证的 Hint anchor/vertical-offset 接口，因此没有伪造位置配置，默认由客户端 Hint 通道展示。
 
-玩家投票使用真实客户端命令通道 `ClientCommandHandler`：
+玩家投票当前使用真实客户端命令通道 `ClientCommandHandler`，但输入 UX 仍是 `PROVISIONAL / TBD`：
 
 ```text
 o4vote 1
@@ -21,7 +21,7 @@ o4vote 2
 
 ## O4 资格与隐私
 
-资格条件是在线且当前为 `Spectator` 或 `Overwatch`。存活玩家、断开连接者和会话开始后才加入的观察者不能参与该会话。投票结算会再次根据当前资格过滤票数。
+资格条件是在线且当前为 `Spectator` 或 `Overwatch`，以及当前 API 可识别的监管模式。存活玩家和断开连接者不属于合法 O4。选民资格是动态的：会话开始后进入合法 O4 状态的新观察者可以立即投票；已投票玩家如果在结算前离开 O4 状态，其票作废。会话只绑定 `RoundId + CycleId + SessionId`，不保存固定选民白名单。
 
 运行时只分配本回合局部 `O4-01`、`O4-02` 这类编号用于日志；不写玩家昵称、Steam ID、User ID 或 Account ID。Round End、Restart、WaitingForPlayers、Plugin Disable 与低人口暂停都会清空映射和会话。
 
@@ -40,16 +40,16 @@ FDI 中 · 危机 BIO
 
 ## M05 选择边界
 
-M05 先完成候选资格、专业响应优先级、来源仲裁与 fallback。只有以下同时成立时，M05 才调用 M06：
+M05 先完成候选资格、专业响应优先级和来源仲裁。只有以下同时成立时，M05 才调用 M06：
 
 - Foundation 普通 SUPPORT 有多个合法候选；
-- M05 的 `O4SelectionRequired=true`；
+- M05 的 `O4SelectionRequired=true`，即 Foundation 普通 SUPPORT 有多个合法候选；
 - M05 的有序 shortlist 有两个候选；
 - 当前 M06 Selector 可用。
 
-M06 不生成、重排或过滤候选，只展示该 shortlist。Chaos、GOI、专业响应和 NON_SUPPORT 不进入 O4 选择。M05 始终保留自己的确定性 fallback。
+M06 不生成、重排或过滤候选，只展示该 shortlist。Chaos、GOI、专业响应和 NON_SUPPORT 不进入 O4 选择。一个候选时不建立 Vote Session，直接返回 M05 并继续最终重验证。平票只返回最高票候选集合，由 M05 使用既有系统规则裁决；M06 不建立自己的权重或 RNG。没有合法 O4 时立即记录 `O4_SELECTION_SKIPPED / NO_O4_AVAILABLE` 并跳过当前 O4-required SUPPORT，不等待、不自动替代、不消费 Event Cost 或 Professional Response。
 
-投票会话绑定 `RoundId + CycleId + SessionId`，默认 20 秒。多数票产生显式 winner；平票、零票、无 O4、取消、过期、失效候选或 Selector 不可用都回退 M05 原选择。stale callback 被忽略。M05 在 `TryStart` 和 Commit 前仍使用最新 Context 重验证人员、危机、D-LRC、人口计划和 Professional eligibility。
+投票会话绑定 `RoundId + CycleId + SessionId`，默认 20 秒。每个当前合法 O4 每个 Session 只能投一次，不能改票。多数票产生显式 winner；零票、取消或超时按 M05 现有生命周期策略结束。stale callback 被忽略。M05 在 `TryStart` 和 Commit 前仍使用最新 Context 重验证人员、危机、D-LRC、人口计划和 Professional eligibility。
 
 ## 生命周期和资源上限
 
@@ -67,7 +67,7 @@ ee o4 status
 
 它输出配置、面板运行状态、合法 O4 数量、当前会话/周期、票数、剩余秒数和玩家输入路径，不提供 RA 投票。
 
-Console 详细日志使用 `[EmergencyEvents][O4]` 前缀，关键动作包括 `O4_PANEL_STARTED`、`O4_SELECTION_REQUESTED`、`O4_VOTE_CAST`、`O4_SELECTION_RESOLVED`、`O4_SELECTION_FALLBACK`、`O4_SELECTION_CANCELLED` 和 `O4_PANEL_STOPPED`。
+Console 详细日志使用 `[EmergencyEvents][O4]` 前缀，关键动作包括 `O4_PANEL_STARTED`、`O4_SELECTION_REQUESTED`、`O4_VOTE_CAST`、`O4_SELECTION_RESOLVED`、`O4_SELECTION_SKIPPED`、`O4_SELECTION_FALLBACK`、`O4_SELECTION_CANCELLED` 和 `O4_PANEL_STOPPED`。
 
 隔离服 dry-run 命令为：
 
@@ -80,4 +80,4 @@ o4_selection_runtime_probe
 
 ## 验证状态
 
-M06 的纯逻辑与 M05 边界测试覆盖候选限制、资格快照、改票、平票/零票/无 O4 fallback、stale 结果、cleanup、最终重验证、资源上限和 1000 次长运行。隔离服启动及真实客户端投票/Hint 呈现仍须单独报告；未运行时状态应标记为 `PENDING`，不能由单元测试代替。
+M06 的纯逻辑与 M05 边界测试覆盖动态加入、离开失效、单票限制、平票交回 M05、零票、无 O4 跳过、stale 结果、cleanup、最终重验证、资源上限和 1000 次长运行。VoteDuration、Hint 刷新/时长、投票数量显示、客户端输入 UX、真实监管模式和视觉呈现仍须单独报告；未运行时状态应标记为 `PENDING`，不能由单元测试代替。

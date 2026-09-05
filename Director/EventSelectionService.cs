@@ -58,14 +58,31 @@ public sealed class EventSelectionService
             .ThenBy(candidate => candidate.Definition.EventId, StringComparer.Ordinal)
             .ToArray();
         EventCandidate selected = sourceCandidates[0];
-        bool needsO4 = source == EventSource.Foundation && sourceCandidates.Length > 1 && context.HasO4Selector;
+        bool needsO4 = source == EventSource.Foundation && sourceCandidates.Length > 1;
         return new SelectionDecision(
             selected,
             source.Value,
             needsO4,
-            true,
-            needsO4 ? "FoundationO4WithFallback" : "AutomaticSourceSelection",
+            !needsO4,
+            needsO4 ? "FoundationO4SelectionRequired" : "AutomaticSourceSelection",
             needsO4 ? sourceCandidates.Take(2).ToArray() : new[] { selected });
+    }
+
+    public EventCandidate? ResolveTiedCandidates(
+        IReadOnlyList<EventCandidate> tiedCandidates,
+        IReadOnlyList<string> tiedCandidateIds)
+    {
+        HashSet<string> allowedIds = new HashSet<string>(
+            tiedCandidateIds ?? Array.Empty<string>(),
+            StringComparer.Ordinal);
+        return (tiedCandidates ?? Array.Empty<EventCandidate>())
+            .Where(candidate => candidate.IsLegal
+                && candidate.Category == EventCategory.Support
+                && allowedIds.Contains(candidate.Definition.EventId))
+            .OrderByDescending(candidate => candidate.Definition.Priority)
+            .ThenByDescending(candidate => candidate.Definition.Weight)
+            .ThenBy(candidate => candidate.Definition.EventId, StringComparer.Ordinal)
+            .FirstOrDefault();
     }
 
     public SelectionDecision? SelectNonSupport(

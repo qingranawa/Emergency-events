@@ -8,7 +8,7 @@
 
 `PluginRuntimeCoordinator` 在回合开始时记录 `RoundStartPopulation` 和 `PopulationTier` 所需事实。少于 `MinimumPlayers`（配置默认 16）时不激活；活动回合降到最低人数以下时进入不可逆的 `LOW_POPULATION_SUSPENDED`。恢复到 16 人不会重新启用本回合模块，必须等待下一局。
 
-回合结束或进入 WaitingForPlayers 时，Round Core、Reinforcement、Crisis、FDI、Director 和 O4 Panel 都应清理自己的回合状态。
+回合结束或进入 WaitingForPlayers 时，Round Core、Reinforcement、Crisis、FDI、Director 和 O4 Panel 都应清理自己的回合状态。管理员执行 `ee disable` 时，会立即清理当前回合的 EE 状态并停止后续 EE 事件处理；插件仍保持加载，但本回合后续按原版处理，下一回合也保持禁用。已经实际应用到当前玩家的开局角色、物品或传送不会在回合中被强制反向改写。
 
 ## M02 wave contract
 
@@ -96,7 +96,7 @@ PreviousFDI + NewEventDelta
 
 若上游 Evaluation、Snapshot、RoundId 或 CrisisAssessment 无效，FDI 保持原值，不消费 DisorderEvent，不推进 `LastProcessedAt` 或 `LastSettlementAt`；后续成功 PERIODIC 继续处理未消费窗口。
 
-FDI 已实现 State-Gated + Band-Aware Order Recovery。只有正常 PERIODIC、上游有效、没有普通事件 Delta、没有 Active Crisis、没有 Chaos/Hostile 存量且设施未 Destroyed 时，才在静默窗口结束后产生负 Recovery Delta。默认静默窗口为 90 秒，HIGH/MEDIUM/LOW 分别为 -2/-1/0；每次恢复或新的普通事件都会重新开始窗口。Recovery 不在 POST_MAJOR_WAVE 或 MANUAL 查询中运行，并以 `ORDER_RECOVERY_CHECK` 记录 Gate、窗口、普通 Delta、前后 FDI 和结果。
+FDI 已实现 State-Gated + Band-Aware Order Recovery。只有正常 PERIODIC、上游有效、没有普通事件 Delta、没有 Active Crisis、没有明显敌对压力且设施未 Destroyed 时，才在静默窗口结束后产生负 Recovery Delta；单个普通 Chaos 不会自动永久阻断 Recovery，明确敌对占优才会阻断。默认静默窗口为 90 秒，HIGH/MEDIUM/LOW 分别为 -2/-1/0；每次恢复或新的普通事件都会重新开始窗口。Recovery 不在 POST_MAJOR_WAVE 或 MANUAL 查询中运行，并以 `ORDER_RECOVERY_CHECK` 记录 Gate、窗口、普通 Delta、前后 FDI 和结果。
 
 ### FDI capacities
 
@@ -131,7 +131,7 @@ Candidate 和 Selected 只是计划。`TryStart` 和 `RevalidateBeforeCommit` �
 
 ### ProfessionalResponseTracker
 
-同一 Crisis Episode 的每个 D-LRC Response Level 只能成功消费一次。Candidate、Selected、Prepared 和 Start 失败都不消费；只有成功 Commit 才调用 `Consume`。Rollback 后 `IsBusy=false`、`CurrentCycle=null`，新周期可以继续。
+同一 Crisis Episode 的每个 D-LRC Response Level 只能成功消费一次。Candidate、Selected、Prepared 和 Start 失败都不消费；只有成本边界成功且 Commit 完成后才调用 `Consume`。Professional Response 的 Commit 必须提供最新 Context；成本边界失败不得消费 Response。Rollback 或 Completed 后 `IsBusy=false`、`CurrentCycle=null`，新周期可以继续。
 
 ### Event #2
 
@@ -145,19 +145,19 @@ DueAt = Event1ActualSpawnTime + SecondSlotDelaySeconds
 
 ### O4 boundary
 
-只有 Foundation 有多个合法普通候选且 `HasO4Selector=true` 时才标记 `O4SelectionRequired`。没有 O4 或投票不可用时使用 fallback。O4 不选择来源，不召唤事件，也不能阻止 Chaos/GOI。
+Foundation 有多个合法普通 SUPPORT 候选时标记 `O4SelectionRequired`，不因当前 O4 是否在线而改写这个事实。O4 不选择来源，不召唤事件，也不能阻止 Chaos/GOI。
 
-M06 启用时也只有在线 Spectator/Overwatch 才可作为 Selector；无 O4、面板禁用、低人口暂停或运行时不可用仍是合法系统状态，不能作为 M05 错误条件，必须保留 fallback。
+M06 的 O4 electorate 是动态的：在线 Spectator、Overwatch 和当前 API 可识别的监管模式可以参与，存活玩家和断开连接者不能参与。Vote Session 不保存固定选民白名单；会话开始后新进入 O4 状态的玩家可以投票，离开 O4 状态的既有投票在结算时作废。没有合法 O4 时，O4-required SUPPORT 立即返回 `SKIPPED / NO_O4_AVAILABLE`，跳过当前支援机会，不等待、不自动替代、不消费 Professional Response、Event Cost 或 Commit。
 
 ## M06 O4 Panel contract
 
 M06 的展示和选择只消费已完成的上游事实。普通 Hint 只向当前在线 Spectator/Overwatch 发送，使用 EXILED `Player.ShowHint(string, float)`；目标 API 没有可靠的 Hint anchor/offset，因此不伪造位置契约。
 
-客户端使用 `o4vote <1|2>`（别名 `eevote`）投票。它通过 `ClientCommandHandler` 处理，不是 RA 命令；`ee o4 status` 只读。会话开始时冻结合格 O4 快照，结算时再次过滤断线、复活或不再是 Spectator/Overwatch 的投票。
+客户端当前使用 `o4vote <1|2>`（别名 `eevote`）投票。它通过 `ClientCommandHandler` 处理，不是 RA 命令；`ee o4 status` 只读。该输入通道仍为 `PROVISIONAL / TBD`。投票时与结算时都读取当前 O4 资格，每个 O4 每个 Session 只能投一次，不能改票。
 
-M05 仅在 Foundation 多个合法普通 SUPPORT 候选且 `HasO4Selector=true` 时传入最多两个已排序候选。M06 不生成、排序、过滤候选，也不能影响 Chaos、GOI、Professional Response 或 NON_SUPPORT。多数票只能选择 shortlist 内候选；平票、零票、无 O4、取消、超时、stale callback 或任何非法结果都使用 M05 fallback。M05 必须继续在 Start/Commit 前重验证。
+M05 仅在 Foundation 多个合法普通 SUPPORT 候选时传入最多两个已排序候选。M06 不生成、排序、过滤候选，也不能影响 Chaos、GOI、Professional Response 或 NON_SUPPORT。多数票只能选择 shortlist 内候选；平票返回 `TIE` 与最高票候选集合，由 M05 在该集合内使用既有系统规则裁决；单候选不建立会话并直接返回 M05；无 O4 返回 `SKIPPED`。M05 必须继续在 Start/Commit 前重验证。
 
-Round End、Restart、WaitingForPlayers、Plugin Disable、LOW_POPULATION_SUSPENDED 和 Runtime Cleanup 必须 Kill Hint/超时回调、取消一次会话并清空局部 O4 ID。最近选择结果默认最多 256 条；不保留账号或身份标识。
+Round End、Restart、WaitingForPlayers、Plugin Disable、LOW_POPULATION_SUSPENDED 和 Runtime Cleanup 必须 Kill Hint/超时回调、取消一次会话并清空局部 O4 ID。O4 取消、失效或请求失败不得让 O4-required SUPPORT 隐式回退到原始候选；最近选择结果默认最多 256 条，不保留账号或身份标识。
 
 ## FacilityState
 

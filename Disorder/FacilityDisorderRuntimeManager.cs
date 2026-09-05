@@ -23,6 +23,7 @@ public sealed class FacilityDisorderRuntimeManager
     private readonly FacilityDisorderService service;
     private readonly HashSet<long> evaluationIds = new HashSet<long>();
     private readonly Queue<long> evaluationIdOrder = new Queue<long>();
+    private readonly List<CoroutineHandle> scheduledHandles = new List<CoroutineHandle>();
     private long highestEvaluationId;
     private ForceSnapshot? previousForces;
     private CrisisAssessment? previousAssessment;
@@ -68,6 +69,7 @@ public sealed class FacilityDisorderRuntimeManager
 
     public void StartRound(DateTime roundStartedAt, int openingPopulation, long currentRoundId = 0L)
     {
+        StopScheduledCallbacks();
         ResetTransientFacts();
         roundId = currentRoundId;
         service.StartRound(roundStartedAt, openingPopulation, currentRoundId);
@@ -78,23 +80,24 @@ public sealed class FacilityDisorderRuntimeManager
     {
         if (service.ObservePopulation(currentPopulation))
         {
+            StopScheduledCallbacks();
             LogInfo($"Suspended; CurrentPopulation={currentPopulation}; MinimumPlayers={config.MinimumPlayers}; IrreversibleForRound=true");
         }
     }
 
     public void ScheduleOpeningForceBaseline()
     {
-        Timing.CallDelayed(1f, () => ReconcileForceSnapshot(recordChanges: false));
+        ScheduleReconcile(recordChanges: false, delaySeconds: 1f);
     }
 
     public void HandlePlayerJoined()
     {
-        Timing.CallDelayed(ReconcileDelaySeconds, () => ReconcileForceSnapshot(recordChanges: false));
+        ScheduleReconcile(recordChanges: false, ReconcileDelaySeconds);
     }
 
     public void HandlePlayerLeft()
     {
-        Timing.CallDelayed(ReconcileDelaySeconds, () => ReconcileForceSnapshot(recordChanges: false));
+        ScheduleReconcile(recordChanges: false, ReconcileDelaySeconds);
     }
 
     public void HandlePlayerDied(DiedEventArgs ev)
@@ -109,7 +112,7 @@ public sealed class FacilityDisorderRuntimeManager
         Player? attacker = ev.Attacker;
         RoleTypeId attackerRole = attacker?.Role.Type ?? RoleTypeId.None;
         RecordDeathFacts(timestamp, ev.Player.Id, targetRole, attackerRole);
-        Timing.CallDelayed(ReconcileDelaySeconds, () => ReconcileForceSnapshot(recordChanges: false));
+        ScheduleReconcile(recordChanges: false, ReconcileDelaySeconds);
     }
 
     public void HandleChangingRole(ChangingRoleEventArgs ev)
@@ -122,7 +125,7 @@ public sealed class FacilityDisorderRuntimeManager
         // 049-2 的生成是新增僵尸事实；普通职业分配和普通复活不作为 FDI 变化。
         if (ev.NewRole == RoleTypeId.Scp0492)
         {
-            Timing.CallDelayed(ReconcileDelaySeconds, () => ReconcileForceSnapshot(recordChanges: true));
+            ScheduleReconcile(recordChanges: true, ReconcileDelaySeconds);
         }
     }
 
@@ -130,7 +133,7 @@ public sealed class FacilityDisorderRuntimeManager
     {
         if (State.IsActive)
         {
-            Timing.CallDelayed(ReconcileDelaySeconds, () => ReconcileForceSnapshot(recordChanges: true));
+            ScheduleReconcile(recordChanges: true, ReconcileDelaySeconds);
         }
     }
 
@@ -216,8 +219,76 @@ public sealed class FacilityDisorderRuntimeManager
 
     public void CleanupRound()
     {
+        StopScheduledCallbacks();
         service.CleanupRound();
         ResetTransientFacts();
+    }
+
+    public void DisableForRound()
+    {
+        StopScheduledCallbacks();
+        service.DisableForRound();
+        ResetTransientFacts();
+    }
+
+    private void ScheduleReconcile(bool recordChanges, float delaySeconds)
+    {
+        if (!State.IsActive || roundId <= 0L)
+        {
+            return;
+        }
+
+        long scheduledRoundId = roundId;
+        CoroutineHandle handle = default(CoroutineHandle);
+        try
+        {
+            handle = Timing.CallDelayed(
+                delaySeconds,
+                () =>
+                {
+                    try
+                    {
+                        if (IsActiveRound(scheduledRoundId))
+                        {
+                            ReconcileForceSnapshot(recordChanges);
+                        }
+                    }
+                    finally
+                    {
+                        RemoveScheduledHandle(scheduledRoundId, handle);
+                    }
+                });
+            scheduledHandles.Add(handle);
+        }
+        catch (Exception exception)
+        {
+            LogInfo($"ReconcileScheduleFailed; RoundId={scheduledRoundId}; RecordChanges={recordChanges}; Reason={exception.GetType().Name}");
+        }
+    }
+
+    private void RemoveScheduledHandle(long scheduledRoundId, CoroutineHandle handle)
+    {
+        if (roundId == scheduledRoundId)
+        {
+            scheduledHandles.Remove(handle);
+        }
+    }
+
+    private void StopScheduledCallbacks()
+    {
+        foreach (CoroutineHandle handle in scheduledHandles)
+        {
+            try
+            {
+                Timing.KillCoroutines(handle);
+            }
+            catch (Exception exception)
+            {
+                LogInfo($"ReconcileCancelFailed; RoundId={roundId}; Reason={exception.GetType().Name}");
+            }
+        }
+
+        scheduledHandles.Clear();
     }
 
     private void RecordDeathFacts(DateTime timestamp, int playerId, RoleTypeId targetRole, RoleTypeId attackerRole)
@@ -442,6 +513,11 @@ public sealed class FacilityDisorderRuntimeManager
         previousWarheadDetonated = false;
         eventSequence = 0L;
         roundId = 0L;
+    }
+
+    private bool IsActiveRound(long currentRoundId)
+    {
+        return State.IsActive && roundId > 0L && roundId == currentRoundId;
     }
 
     private string ResolveBandForLog(double value)
